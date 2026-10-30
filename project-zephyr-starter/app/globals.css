@@ -1,0 +1,312 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+/* ==========================================================================
+   Project Zephyr — global design system
+   --------------------------------------------------------------------------
+   All colours used by components come from the CSS variables defined here.
+   Two deliberately designed themes, selected by the `data-theme` attribute on
+   <html> (set before first paint by an inline script in app/layout.tsx):
+
+     [data-theme="dark"]   near-black / charcoal, subtle blue accent
+     [data-theme="light"]  white / slate, restrained blue accent
+
+   Status colours:  blue = active/neutral   red = threat/failed/blocked
+                    amber = pending/caution green = healthy/verified
+   ========================================================================== */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0b0d11;
+  --surface: #12151b;
+  --elevated: #191d25;
+  --overlay: #1f242e;
+  --fg: #e6e9ef;
+  --fg-strong: #f4f6fa;
+  --muted: #98a1b2;
+  --subtle: #6b7488;
+  --border: #252b36;
+  --border-strong: #343c4b;
+
+  --accent: #4c8dff;
+  --accent-fg: #07101f;
+  --danger: #f0615d;
+  --warning: #e0a53a;
+  --success: #3fb97f;
+  --feedback: #a78bfa;
+
+  --shadow-color: rgb(0 0 0 / 0.45);
+  --scrim: rgb(2 4 8 / 0.62);
+  --terminal-bg: #07090c;
+  --terminal-fg: #cfd6e4;
+  --grid-dot: #1d222c;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --elevated: #f1f3f6;
+  --overlay: #ffffff;
+  --fg: #1f2733;
+  --fg-strong: #0f1620;
+  --muted: #5b667a;
+  --subtle: #8792a5;
+  --border: #dde2ea;
+  --border-strong: #c6cdd9;
+
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+  --danger: #cf3b36;
+  --warning: #a86a0a;
+  --success: #1c8a56;
+  --feedback: #6d4fd6;
+
+  --shadow-color: rgb(20 30 50 / 0.12);
+  --scrim: rgb(20 28 44 / 0.4);
+  --terminal-bg: #0a0d12;
+  --terminal-fg: #d5dbe8;
+  --grid-dot: #d3d9e3;
+}
+
+/* Terminal palette: a terminal stays dark in both themes, with ANSI-style colours. */
+:root {
+  --term-dim: #6b7488;
+  --term-green: #5fd38d;
+  --term-red: #ff6b6b;
+  --term-yellow: #e6b450;
+  --term-blue: #6ea8fe;
+  --term-cyan: #56d4dd;
+  --term-magenta: #c792ea;
+}
+
+/* Soft status tints derive from the base tokens so both themes stay in sync. */
+:root {
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --danger-soft: color-mix(in srgb, var(--danger) 14%, transparent);
+  --warning-soft: color-mix(in srgb, var(--warning) 15%, transparent);
+  --success-soft: color-mix(in srgb, var(--success) 14%, transparent);
+  --feedback-soft: color-mix(in srgb, var(--feedback) 14%, transparent);
+  --hover: color-mix(in srgb, var(--fg) 6%, transparent);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --nav-h: 56px;
+}
+
+/* Tailwind utilities for every token (bg-surface, text-muted, border-border …) */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-overlay: var(--overlay);
+  --color-fg: var(--fg);
+  --color-fg-strong: var(--fg-strong);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-feedback: var(--feedback);
+  --color-feedback-soft: var(--feedback-soft);
+  --color-hover: var(--hover);
+  --color-terminal-bg: var(--terminal-bg);
+  --color-terminal-fg: var(--terminal-fg);
+  --color-term-dim: var(--term-dim);
+  --color-term-green: var(--term-green);
+  --color-term-red: var(--term-red);
+  --color-term-yellow: var(--term-yellow);
+  --color-term-blue: var(--term-blue);
+  --color-term-cyan: var(--term-cyan);
+  --color-term-magenta: var(--term-magenta);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* --------------------------------------------------------------------------
+   Base
+   -------------------------------------------------------------------------- */
+html {
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+button,
+[role="button"],
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Slim, theme-aware scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle dotted canvas used behind topology / architecture */
+.canvas-grid {
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* --------------------------------------------------------------------------
+   Motion — subtle by default, disabled for reduced-motion users
+   -------------------------------------------------------------------------- */
+@keyframes zephyr-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes zephyr-toast-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes zephyr-drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes zephyr-pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse, var(--accent)) 45%, transparent); }
+  100% { box-shadow: 0 0 0 8px transparent; }
+}
+@keyframes zephyr-blink {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); }
+  50% { opacity: 0.35; box-shadow: 0 0 0 6px transparent; }
+}
+@keyframes zephyr-dash {
+  to { stroke-dashoffset: -24; }
+}
+
+.anim-blink { animation: zephyr-blink 1s ease-in-out infinite; }
+.anim-fade-in { animation: zephyr-fade-in 180ms ease-out both; }
+.anim-toast-in { animation: zephyr-toast-in 200ms ease-out both; }
+.anim-drawer-in { animation: zephyr-drawer-in 200ms ease-out both; }
+.pulse-once { animation: zephyr-pulse-ring 900ms ease-out 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   React Flow — theme bridge (topology + architecture canvases)
+   -------------------------------------------------------------------------- */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--border-strong);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-edge-stroke-width: 1.5;
+  --xy-edge-label-color: var(--muted);
+  --xy-edge-label-background-color: var(--surface);
+  --xy-handle-background-color: var(--accent);
+  --xy-handle-border-color: var(--surface);
+  --xy-connectionline-stroke: var(--accent);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--elevated);
+  --xy-controls-button-color: var(--fg);
+  --xy-controls-button-color-hover: var(--fg-strong);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: 0 2px 8px var(--shadow-color);
+  --xy-minimap-background-color: var(--surface);
+  --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg) 70%, transparent);
+  --xy-minimap-mask-stroke-color: var(--accent);
+  --xy-minimap-node-background-color: var(--border-strong);
+  --xy-background-pattern-color: var(--grid-dot);
+  --xy-attribution-background-color: transparent;
+  font-family: var(--font-sans);
+}
+
+.react-flow__attribution {
+  background: transparent !important;
+  color: var(--subtle);
+}
+.react-flow__attribution a {
+  color: var(--subtle);
+}
+
+.react-flow__controls {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.react-flow__controls-button {
+  border-bottom-color: var(--border);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+.react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* Edge flavours used by both canvases */
+.react-flow__edge.edge-data .react-flow__edge-path { stroke: var(--accent); }
+.react-flow__edge.edge-validation .react-flow__edge-path { stroke: var(--warning); }
+.react-flow__edge.edge-execution .react-flow__edge-path { stroke: var(--success); }
+.react-flow__edge.edge-learning .react-flow__edge-path { stroke: var(--feedback); }
+.react-flow__edge.edge-danger .react-flow__edge-path { stroke: var(--danger); }
+.react-flow__edge.edge-muted .react-flow__edge-path { stroke: var(--border-strong); }
+.react-flow__edge.edge-dim .react-flow__edge-path { opacity: 0.25; }
+.react-flow__edge.edge-flow .react-flow__edge-path {
+  stroke-dasharray: 6 6;
+  animation: zephyr-dash 900ms linear infinite;
+}
+.react-flow__edge-textbg { fill: var(--surface); }
+.react-flow__edge-text { fill: var(--muted); font-size: 11px; font-weight: 500; }
+
+.react-flow__node { cursor: pointer; }
+.react-flow__pane { cursor: grab; }
+.react-flow__pane.dragging, .react-flow__pane:active { cursor: grabbing; }
+.react-flow__node.nodrag-region { cursor: default; }
+
+/* Visually hidden, but available to assistive tech */
+.sr-only-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
