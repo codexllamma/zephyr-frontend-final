@@ -8,17 +8,20 @@ import { terminalBanner, type TerminalOutputLine } from "@/lib/terminal";
 import { currentAttempt } from "@/lib/selectors";
 import { LIVE } from "@/lib/config";
 import { mapNetworkStatus, pendingToCase, pendingToFlows } from "@/lib/live-map";
-import type { BackendSnapshot } from "@/types/backend";
+import type { BackendPendingItem, BackendSnapshot, VariantMode } from "@/types/backend";
 import { DEVICE_IDS, EXT_NODE_IDS } from "@/types";
 import type {
   AlertCase,
   DeviceId,
   DeviceRuntime,
+  DramaState,
   EventSeverity,
   ExtNodeId,
-  PostmortemCard,
   LifecycleStage,
   NetworkFlow,
+  NodeId,
+  PostmortemCard,
+  Protocol,
   ReviewDecision,
   ScenarioEffect,
   ScenarioId,
@@ -27,6 +30,16 @@ import type {
   Toast,
   ToastTone,
 } from "@/types";
+
+export const LIVE_NODE_IPS: Record<NodeId, string> = {
+  "pc-1": "172.28.0.12",
+  "pc-2": "172.28.0.13",
+  "pc-3": "172.28.0.14",
+  "pc-4": "172.28.0.15",
+  "pc-5": "172.28.0.16",
+  "ext-net": "172.28.0.100",
+  "traffic-gen": "172.28.0.101",
+};
 
 export interface DemoState {
   clockMs: number;
@@ -47,8 +60,10 @@ export interface DemoState {
   acknowledged: string[];
   toasts: Toast[];
   mode: "demo" | "live";
+  isLiveMode?: boolean;
   backend: BackendState;
   extNodes: Record<ExtNodeId, DeviceRuntime>;
+  drama: DramaState;
 }
 
 export interface BackendState {
@@ -60,6 +75,8 @@ export interface BackendState {
 
 export type DemoAction =
   | { type: "set_mode"; mode: "demo" | "live" }
+  | { type: "set_live_mode"; isLive: boolean }
+  | { type: "toggle_live_mode" }
   | { type: "select_device"; id: DeviceId }
   | { type: "select_alert"; id: string | null }
   | { type: "select_scenario"; id: ScenarioId }
@@ -78,8 +95,54 @@ export type DemoAction =
   | { type: "live_error"; message: string; nowMs: number }
   | { type: "live_resolved"; alertId: string; approved: boolean; status: string; cmd?: string; postmortem?: PostmortemCard; nowMs: number }
   | { type: "live_attack"; message: string; nowMs: number }
+  | { type: "live_envelope_received"; item: BackendPendingItem; nowMs: number }
+  | {
+      type: "drama_attack_start";
+      sourceNode: NodeId;
+      targetNode: DeviceId;
+      targetPort?: number;
+      protocol?: Protocol;
+      threatSignature?: string;
+      nowMs: number;
+    }
+  | { type: "drama_thinking_step"; step: number }
+  | { type: "drama_thinking_complete" }
+  | {
+      type: "drama_offline_fallback";
+      sourceNode: NodeId;
+      targetNode: DeviceId;
+      variant: VariantMode;
+      threatSignature: string;
+      targetPort: number;
+      protocol: Protocol;
+      nowMs: number;
+    }
   | { type: "toast_push"; tone: ToastTone; title: string; message?: string }
   | { type: "toast_dismiss"; id: string };
+
+export function createInitialDrama(attackEpoch = 0, mitigationEpoch = 0): DramaState {
+  return {
+    phase: "idle",
+    attackEpoch,
+    mitigationEpoch,
+    startedAtMs: null,
+    thinkingStep: 0,
+    sourceNode: "ext-net",
+    targetNode: "pc-4",
+    sourceIp: LIVE_NODE_IPS["ext-net"],
+    targetIp: LIVE_NODE_IPS["pc-4"],
+    targetPort: 80,
+    protocol: "TCP",
+    threatSignature: "TCP_SYN_VOLUMETRIC",
+  };
+}
+
+function resolveNodeIp(s: DemoState, id: NodeId): string {
+  if ((DEVICE_IDS as readonly string[]).includes(id)) {
+    return s.devices[id as DeviceId]?.ip ?? LIVE_NODE_IPS[id] ?? NODE_IP[id as DeviceId] ?? "172.28.0.15";
+  }
+  return s.extNodes[id as ExtNodeId]?.ip ?? LIVE_NODE_IPS[id] ?? "172.28.0.100";
+}
 
 function bannerLines(deviceId: DeviceId, startSeq: number): TerminalLine[] {
   return terminalBanner(deviceId).map((l, i) => ({
@@ -93,16 +156,23 @@ function bannerLines(deviceId: DeviceId, startSeq: number): TerminalLine[] {
 
 function createLiveState(): DemoState {
   const base = createDemoState();
-  const devices = Object.fromEntries(DEVICE_IDS.map((d) => [d, { status: "unknown" } as DeviceRuntime])) as Record<DeviceId, DeviceRuntime>;
+  const devices = Object.fromEntries(
+    DEVICE_IDS.map((d) => [d, { status: "healthy", ip: LIVE_NODE_IPS[d] } as DeviceRuntime]),
+  ) as Record<DeviceId, DeviceRuntime>;
   return {
     ...base,
     mode: "live",
+    isLiveMode: true,
     devices,
     flows: [],
     cases: [],
     selectedDeviceId: "pc-4",
     backend: { link: "connecting", executedCount: 0 },
-    extNodes: { "ext-net": { status: "unknown" }, "traffic-gen": { status: "unknown" } },
+    extNodes: {
+      "ext-net": { status: "healthy", ip: LIVE_NODE_IPS["ext-net"] },
+      "traffic-gen": { status: "healthy", ip: LIVE_NODE_IPS["traffic-gen"] },
+    },
+    drama: createInitialDrama(),
   };
 }
 
@@ -126,8 +196,13 @@ function createDemoState(): DemoState {
     acknowledged: [],
     toasts: [],
     mode: "demo",
+    isLiveMode: false,
     backend: { link: "online", executedCount: 0 },
-    extNodes: { "ext-net": { status: "unknown" }, "traffic-gen": { status: "unknown" } },
+    extNodes: {
+      "ext-net": { status: "healthy", ip: LIVE_NODE_IPS["ext-net"] },
+      "traffic-gen": { status: "healthy", ip: LIVE_NODE_IPS["traffic-gen"] },
+    },
+    drama: createInitialDrama(),
   };
 }
 
@@ -266,12 +341,12 @@ function applyNetworkOutcome(s: DemoState, c: AlertCase, outcome: Outcome): Demo
   switch (outcome) {
     case "blocked":
       next.flows = s.flows.map((f) => (matchesFlow(f, c) ? { ...f, pattern: "blocked", pps: 0 } : f));
-      next = setDevice(next, dst, { status: "healthy" });
+      next = setDevice(next, dst, { status: "mitigated" });
       next = appendPacketOutcome(next, "DROP", `${srcIp} -> ${dstIp}:${port} PROTO=${proto}`);
       break;
     case "limited":
       next.flows = s.flows.map((f) => (matchesFlow(f, c) ? { ...f, pattern: "routine", pps: 20 } : f));
-      next = setDevice(next, dst, { status: "healthy" });
+      next = setDevice(next, dst, { status: "mitigated" });
       next = appendPacketOutcome(next, "DROP", `${srcIp} -> ${dstIp}:${port} PROTO=${proto}`);
       break;
     case "accepted":
@@ -281,7 +356,9 @@ function applyNetworkOutcome(s: DemoState, c: AlertCase, outcome: Outcome): Demo
     case "benign":
       next.flows = s.flows.map((f) => (matchesFlow(f, c) ? { ...f, pattern: "routine" } : f));
       next = setDevice(next, dst, { status: "healthy" });
-      next = setDevice(next, src as DeviceId, { status: "healthy" });
+      if ((DEVICE_IDS as readonly string[]).includes(src)) {
+        next = setDevice(next, src as DeviceId, { status: "healthy" });
+      }
       next = appendPacketOutcome(next, "ACCEPT", `${srcIp} -> ${dstIp}:${port} PROTO=${proto}`);
       break;
   }
@@ -326,6 +403,7 @@ function reviewCase(s: DemoState, caseId: string, decision: ReviewDecision, note
       : { status: "pending", simulated: true, message: "Awaiting final validation and execution (simulated)." },
   }));
   next = tick(next, 1);
+
   if (decision === "approve") {
     const isNoOp = attempt.envelope.chosen_mitigation.action_type === "NO_OP";
     next = appendPacketOutcome(
@@ -333,13 +411,45 @@ function reviewCase(s: DemoState, caseId: string, decision: ReviewDecision, note
       isNoOp ? "ACCEPT" : "DROP",
       `${c.alert.source_ip} -> ${c.alert.target_ip}:${c.alert.dest_port} PROTO=${c.alert.protocol ?? "TCP"}`,
     );
+    const targetNode = c.alert.target_node;
+    next = setDevice(next, targetNode, { status: "mitigated" });
+    next = {
+      ...next,
+      flows: [
+        {
+          id: "flow-sla-routine",
+          from: "traffic-gen",
+          to: targetNode,
+          port: 80,
+          protocol: "HTTP",
+          pps: 120,
+          pattern: "routine",
+        },
+      ],
+      extNodes: {
+        ...next.extNodes,
+        "ext-net": { ...next.extNodes["ext-net"], status: "healthy" },
+        "traffic-gen": { ...next.extNodes["traffic-gen"], status: "healthy" },
+      },
+      drama: {
+        ...next.drama,
+        phase: "mitigated",
+        mitigationEpoch: next.drama.mitigationEpoch + 1,
+      },
+    };
   } else if (decision === "reject" || decision === "mark_benign") {
     next = appendPacketOutcome(
       next,
       "ACCEPT",
       `${c.alert.source_ip} -> ${c.alert.target_ip}:${c.alert.dest_port} PROTO=${c.alert.protocol ?? "TCP"}`,
     );
+    next = {
+      ...next,
+      flows: next.flows.filter((f) => f.pattern !== "suspicious"),
+      drama: { ...next.drama, phase: "idle" },
+    };
   }
+
   next = addToast(next, decision === "approve" || decision === "mark_benign" ? "success" : "info", "Review decision recorded", `${REVIEWER} ${m.verb} (${id})`);
 
   if (decision === "mark_benign") next = applyNetworkOutcome(next, c, "benign");
@@ -395,10 +505,99 @@ function advancePipeline(s: DemoState, caseId: string): DemoState {
   return s;
 }
 
+function buildOfflineFallbackPendingItem(a: Extract<DemoAction, { type: "drama_offline_fallback" }>, s: DemoState): BackendPendingItem {
+  const srcIp = resolveNodeIp(s, a.sourceNode);
+  const dstIp = resolveNodeIp(s, a.targetNode);
+  const port = a.targetPort || 80;
+  const protoLower = (a.protocol || "TCP").toLowerCase() === "http" ? "tcp" : (a.protocol || "TCP").toLowerCase();
+  const goldenCmd = `iptables -A INPUT -s ${srcIp} -p ${protoLower} --dport ${port} -m limit ! --limit 15/s --limit-burst 30 -j DROP`;
+
+  const pickedVariant =
+    a.variant === "B"
+      ? "B"
+      : a.variant === "C"
+        ? "C"
+        : a.variant === "D"
+          ? "D"
+          : "A";
+
+  const isB = pickedVariant === "B";
+  const isC = pickedVariant === "C";
+  const cbTriggered = isB || isC;
+  const qScore = isB ? 0.45 : isC ? 0.24 : pickedVariant === "D" ? 0.84 : 0.96;
+  const flawedCmd = isB
+    ? `iptables -A INPUT -s 172.28.0.0/16 -p ${protoLower} --dport ${port} -j DROP`
+    : isC
+      ? `iptables -A INPUT -s ${srcIp} -p ${protoLower} --syn-flood-kill`
+      : undefined;
+  const cbReason = isB
+    ? "BLAST_RADIUS_GATE: Rule drops entire /16 subnet, severing benign SLA traffic. | Q_SCORE_GATE: Confidence Q=0.45 below minimum autonomous threshold (0.75)."
+    : isC
+      ? "GRAMMAR_GATE: Unrecognized netfilter flag or invalid iptables syntax. | Q_SCORE_GATE: Confidence Q=0.24 below minimum autonomous threshold (0.75)."
+      : undefined;
+
+  return {
+    alert_id: `evt-${a.nowMs % 1_000_000_000}`,
+    category_id: 1,
+    threat_family: "Volumetric & Protocol Exhaustion",
+    scenario_id: "SCENARIO_1",
+    attacker_node: a.sourceNode,
+    target_container: a.targetNode,
+    source_ip: srcIp,
+    destination_ip: dstIp,
+    timestamp: isoFromMs(a.nowMs),
+    threat_classification: a.threatSignature || "TCP_SYN_VOLUMETRIC",
+    severity: "CRITICAL",
+    selected_variant: pickedVariant,
+    variant_label: isB ? "BLANKET_DROP" : isC ? "SYNTAX_ERROR" : "GOLDEN_PLAYBOOK",
+    q_score: qScore,
+    circuit_breaker_triggered: cbTriggered,
+    circuit_breaker_reason: cbReason,
+    violated_gates: cbTriggered ? [cbReason!] : [],
+    telemetry_vector: {
+      packet_rate_pps: 14500,
+      byte_rate_bps: 870000,
+      syn_ack_ratio: 0.99,
+      payload_entropy: 2.15,
+      avg_packet_size: 60,
+      active_socket_count: 4096,
+      mitre_tactic: "TA0040 Impact",
+      mitre_technique: "T1498.001",
+    },
+    chosen_mitigation: {
+      action_type: cbTriggered ? "FALLBACK_GOLDEN_PLAYBOOK" : "GOLDEN_PLAYBOOK",
+      target_container: a.targetNode,
+      source_ip: srcIp,
+      dest_port: port,
+      iptables_cmd: goldenCmd,
+      fallback_cmd: `iptables -A INPUT -s ${srcIp} -p ${protoLower} --dport ${port} -j DROP`,
+      intercepted_flawed_cmd: flawedCmd,
+      q_score: qScore,
+      variant_id: pickedVariant,
+    },
+  };
+}
+
 export function demoReducer(s: DemoState, a: DemoAction): DemoState {
   switch (a.type) {
     case "set_mode":
-      return a.mode === s.mode ? s : a.mode === "live" ? createLiveState() : createDemoState();
+      return a.mode === s.mode
+        ? s
+        : a.mode === "live"
+          ? { ...createLiveState(), isLiveMode: true }
+          : { ...createDemoState(), isLiveMode: false };
+    case "set_live_mode":
+      return a.isLive === (s.mode === "live")
+        ? s
+        : a.isLive
+          ? { ...createLiveState(), isLiveMode: true }
+          : { ...createDemoState(), isLiveMode: false };
+    case "toggle_live_mode": {
+      const willBeLive = s.mode !== "live";
+      return willBeLive
+        ? { ...createLiveState(), isLiveMode: true }
+        : { ...createDemoState(), isLiveMode: false };
+    }
     case "select_device":
       return { ...s, selectedDeviceId: a.id };
     case "select_alert":
@@ -444,6 +643,140 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
     }
     case "reset": {
       return s.mode === "live" ? createLiveState() : createDemoState();
+    }
+
+    case "drama_attack_start": {
+      const srcIp = resolveNodeIp(s, a.sourceNode);
+      const dstIp = resolveNodeIp(s, a.targetNode);
+      const port = a.targetPort ?? 80;
+      const proto = a.protocol ?? "TCP";
+      const sig = a.threatSignature ?? "TCP_SYN_VOLUMETRIC";
+
+      const devices = { ...s.devices };
+      if ((DEVICE_IDS as readonly string[]).includes(a.sourceNode)) {
+        devices[a.sourceNode as DeviceId] = { ...devices[a.sourceNode as DeviceId], status: "attacking" };
+      }
+      devices[a.targetNode] = { ...devices[a.targetNode], status: "under_attack" };
+
+      const extNodes = { ...s.extNodes };
+      if ((EXT_NODE_IDS as readonly string[]).includes(a.sourceNode)) {
+        extNodes[a.sourceNode as ExtNodeId] = { ...extNodes[a.sourceNode as ExtNodeId], status: "attacking" };
+      }
+
+      // Dismiss any unreviewed stale cases locally so only the incoming threat prompts after 14s
+      const cleanedCases = s.cases.map((c) =>
+        c.stage === "awaiting_review" ? { ...c, stage: "rejected" as LifecycleStage } : c,
+      );
+
+      return {
+        ...s,
+        clockMs: a.nowMs,
+        cases: cleanedCases,
+        devices,
+        extNodes,
+        flows: [
+          {
+            id: "flow-drama-active",
+            from: a.sourceNode,
+            to: a.targetNode,
+            port,
+            protocol: proto,
+            pps: 14500,
+            pattern: "suspicious",
+          },
+        ],
+        drama: {
+          phase: "thinking",
+          attackEpoch: s.drama.attackEpoch + 1,
+          mitigationEpoch: s.drama.mitigationEpoch,
+          startedAtMs: a.nowMs,
+          thinkingStep: 0,
+          sourceNode: a.sourceNode,
+          targetNode: a.targetNode,
+          sourceIp: srcIp,
+          targetIp: dstIp,
+          targetPort: port,
+          protocol: proto,
+          threatSignature: sig,
+        },
+      };
+    }
+
+    case "drama_thinking_step": {
+      if (s.drama.phase !== "thinking") return s;
+      const clamped = Math.max(0, Math.min(4, a.step));
+      return clamped === s.drama.thinkingStep
+        ? s
+        : { ...s, drama: { ...s.drama, thinkingStep: clamped } };
+    }
+
+    case "drama_thinking_complete": {
+      if (s.drama.phase !== "thinking") return s;
+      return {
+        ...s,
+        drama: {
+          ...s.drama,
+          phase: "awaiting_decision",
+          thinkingStep: 4,
+        },
+      };
+    }
+
+    case "live_envelope_received": {
+      const iso = isoFromMs(a.nowMs);
+      const net: Partial<Record<NodeId, DeviceRuntime>> = {
+        ...s.devices,
+        ...s.extNodes,
+      };
+      const newCase = pendingToCase(a.item, net, iso);
+      const exists = s.cases.some((c) => c.id === newCase.id);
+      const cases = exists
+        ? s.cases.map((c) => (c.id === newCase.id ? newCase : c))
+        : [...s.cases, newCase];
+
+      return {
+        ...s,
+        clockMs: a.nowMs,
+        cases,
+        selectedAlertId: newCase.id,
+        flows: pendingToFlows([a.item]),
+        drama: {
+          ...s.drama,
+          phase: s.drama.phase === "thinking" ? "thinking" : "awaiting_decision",
+          sourceNode: newCase.alert.source_node,
+          targetNode: newCase.alert.target_node,
+          sourceIp: newCase.alert.source_ip,
+          targetIp: newCase.alert.target_ip,
+          targetPort: newCase.alert.dest_port,
+          protocol: newCase.alert.protocol ?? s.drama.protocol,
+          threatSignature: a.item.threat_classification ?? s.drama.threatSignature,
+        },
+      };
+    }
+
+    case "drama_offline_fallback": {
+      const item = buildOfflineFallbackPendingItem(a, s);
+      const iso = isoFromMs(a.nowMs);
+      const net: Partial<Record<NodeId, DeviceRuntime>> = {
+        ...s.devices,
+        ...s.extNodes,
+      };
+      const fallbackCase: AlertCase = {
+        ...pendingToCase(item, net, iso),
+        provenance: "demo",
+      };
+      return {
+        ...s,
+        clockMs: a.nowMs,
+        cases: [...s.cases, fallbackCase],
+        selectedAlertId: fallbackCase.id,
+        flows: pendingToFlows([item]),
+        drama: {
+          ...s.drama,
+          phase: "awaiting_decision",
+          thinkingStep: 4,
+        },
+      };
     }
 
     case "review":
@@ -528,36 +861,86 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
           !historyCases.some((h) => h.id === c.id),
       );
       const cases = [...pendingCases, ...historyCases, ...localResolved];
+
       const devices = { ...s.devices };
-      for (const id of DEVICE_IDS) devices[id] = net[id] ? { ...net[id]! } : { ...devices[id], status: "unknown" };
+      for (const id of DEVICE_IDS) {
+        devices[id] = net[id] ? { ...net[id]! } : { ...devices[id], status: devices[id]?.status ?? "healthy" };
+      }
       const extNodes = { ...s.extNodes };
-      for (const id of EXT_NODE_IDS) extNodes[id] = net[id] ? { ...net[id]! } : { ...extNodes[id], status: "unknown" };
-      const selectedAlertId = cases.some((c) => c.id === s.selectedAlertId)
-        ? s.selectedAlertId
-        : pendingCases.length > 0
+      for (const id of EXT_NODE_IDS) {
+        extNodes[id] = net[id] ? { ...net[id]! } : { ...extNodes[id], status: extNodes[id]?.status ?? "healthy" };
+      }
+
+      // Preserve active attack topology state while the 14s LLM thinking phase is running
+      let flows = pendingToFlows(pending);
+      if (s.drama.phase === "thinking" || s.drama.phase === "awaiting_decision") {
+        devices[s.drama.targetNode] = { ...devices[s.drama.targetNode], status: "under_attack" };
+        if ((DEVICE_IDS as readonly string[]).includes(s.drama.sourceNode)) {
+          const sid = s.drama.sourceNode as DeviceId;
+          devices[sid] = { ...devices[sid], status: "attacking" };
+        } else {
+          const eid = s.drama.sourceNode as ExtNodeId;
+          extNodes[eid] = { ...extNodes[eid], status: "attacking" };
+        }
+        if (flows.length === 0) {
+          flows = [
+            {
+              id: "flow-drama-active",
+              from: s.drama.sourceNode,
+              to: s.drama.targetNode,
+              port: s.drama.targetPort,
+              protocol: s.drama.protocol,
+              pps: 14500,
+              pattern: "suspicious",
+            },
+          ];
+        }
+      } else if (s.drama.phase === "mitigated") {
+        devices[s.drama.targetNode] = { ...devices[s.drama.targetNode], status: "mitigated" };
+        if ((DEVICE_IDS as readonly string[]).includes(s.drama.sourceNode)) {
+          const sid = s.drama.sourceNode as DeviceId;
+          if (sid !== s.drama.targetNode) {
+            devices[sid] = { ...devices[sid], status: "blocked" };
+          }
+        } else {
+          const eid = s.drama.sourceNode as ExtNodeId;
+          extNodes[eid] = { ...extNodes[eid], status: "blocked" };
+        }
+        extNodes["traffic-gen"] = { ...extNodes["traffic-gen"], status: "healthy" };
+        if (flows.length === 0) {
+          flows = [
+            {
+              id: "flow-sla-routine",
+              from: "traffic-gen",
+              to: s.drama.targetNode,
+              port: 80,
+              protocol: "HTTP",
+              pps: 120,
+              pattern: "routine",
+            },
+          ];
+        }
+      }
+
+      const selectedAlertId =
+        pendingCases.length > 0
           ? pendingCases[pendingCases.length - 1].id
-          : cases.length > 0
-            ? cases[cases.length - 1].id
-            : null;
-      let next: DemoState = {
+          : cases.some((c) => c.id === s.selectedAlertId)
+            ? s.selectedAlertId
+            : cases.length > 0
+              ? cases[cases.length - 1].id
+              : null;
+
+      return {
         ...s,
         clockMs: a.nowMs,
         cases,
         devices,
         extNodes,
-        flows: pendingToFlows(pending),
+        flows,
         selectedAlertId,
         backend: { link: "online", lastSyncAt: iso, executedCount: historyRecords.length || s.backend.executedCount },
       };
-      for (const c of pendingCases) {
-        if (known.has(c.id)) continue;
-        next = appendPacketOutcome(
-          next,
-          "DROP",
-          `${c.alert.source_ip} -> ${c.alert.target_ip}:${c.alert.dest_port} PROTO=${c.alert.protocol ?? "TCP"}`,
-        );
-      }
-      return next;
     }
     case "live_error": {
       if (s.mode !== "live") return s;
@@ -566,10 +949,10 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
     case "live_resolved": {
       const iso = isoFromMs(a.nowMs);
       const targetCase = s.cases.find((c) => c.id === a.alertId);
+      const targetNode = targetCase?.alert.target_node ?? s.drama.targetNode;
       const updatedCases = s.cases.map((c) => {
         if (c.id !== a.alertId) return c;
         const chosenCmd = a.cmd ?? c.attempts[0]?.envelope.chosen_mitigation.iptables_cmd ?? "";
-        const targetNode = c.alert.target_node;
         return {
           ...c,
           stage: (a.approved ? "executed" : "rejected") as LifecycleStage,
@@ -594,12 +977,51 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
               },
         };
       });
+
+      const devices = { ...s.devices };
+      devices[targetNode] = {
+        ...devices[targetNode],
+        status: a.approved ? "mitigated" : "healthy",
+      };
+      const extNodes = {
+        ...s.extNodes,
+        "ext-net": { ...s.extNodes["ext-net"], status: (a.approved ? "blocked" : "healthy") as DeviceRuntime["status"] },
+        "traffic-gen": { ...s.extNodes["traffic-gen"], status: "healthy" as const },
+      };
+
+      const flows: NetworkFlow[] = a.approved
+        ? [
+            {
+              id: "flow-sla-routine",
+              from: "traffic-gen",
+              to: targetNode,
+              port: 80,
+              protocol: "HTTP",
+              pps: 120,
+              pattern: "routine",
+            },
+          ]
+        : [];
+
       let next: DemoState = {
         ...s,
         clockMs: a.nowMs,
         cases: updatedCases,
+        devices,
+        extNodes,
+        flows,
         selectedAlertId: s.selectedAlertId ?? a.alertId,
         backend: { ...s.backend, executedCount: s.backend.executedCount + (a.approved ? 1 : 0) },
+        drama: a.approved
+          ? {
+              ...s.drama,
+              phase: "mitigated",
+              mitigationEpoch: s.drama.mitigationEpoch + 1,
+            }
+          : {
+              ...s.drama,
+              phase: "idle",
+            },
       };
       if (targetCase) {
         next = appendPacketOutcome(

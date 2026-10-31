@@ -10,9 +10,43 @@ import { THREAT_DESCRIPTIONS } from "./explain";
 export const FALLBACK_SOURCES = ["ext-net", "pc-1", "pc-2", "pc-3", "pc-4", "pc-5"];
 export const FALLBACK_TARGETS = ["pc-4", "pc-1", "pc-2", "pc-3", "pc-5"];
 
+export const SCENARIO_META: Record<number, { port: number; protocol: string }> = {
+  1: { port: 80, protocol: "TCP" },
+  2: { port: 8080, protocol: "UDP" },
+  3: { port: 11211, protocol: "UDP" },
+  4: { port: 80, protocol: "HTTP" },
+  5: { port: 80, protocol: "HTTP" },
+  6: { port: 443, protocol: "HTTPS" },
+  7: { port: 0, protocol: "TCP" },
+  8: { port: 80, protocol: "TCP" },
+  9: { port: 161, protocol: "UDP" },
+  10: { port: 80, protocol: "HTTP" },
+  11: { port: 8080, protocol: "HTTP" },
+  12: { port: 80, protocol: "HTTP" },
+  13: { port: 2375, protocol: "TCP" },
+  14: { port: 10250, protocol: "HTTPS" },
+  15: { port: 80, protocol: "HTTP" },
+  16: { port: 22, protocol: "SSH" },
+  17: { port: 5432, protocol: "TCP" },
+  18: { port: 3306, protocol: "TCP" },
+  19: { port: 445, protocol: "TCP" },
+  20: { port: 21, protocol: "TCP" },
+  21: { port: 6379, protocol: "TCP" },
+  22: { port: 53, protocol: "DNS" },
+  23: { port: 0, protocol: "ICMP" },
+  24: { port: 3333, protocol: "TCP" },
+  25: { port: 23, protocol: "TCP" },
+  26: { port: 1883, protocol: "TCP" },
+  27: { port: 5683, protocol: "UDP" },
+  28: { port: 80, protocol: "TCP" },
+  29: { port: 179, protocol: "TCP" },
+  30: { port: 0, protocol: "ICMP" },
+};
+
 export const FALLBACK_THREATS: CatalogThreat[] = Object.entries(THREAT_DESCRIPTIONS).map(([key, desc], idx) => {
   const num = idx + 1;
   const scenarioKey = `SCENARIO_${num}`;
+  const meta = SCENARIO_META[num] ?? { port: 80, protocol: "TCP" };
   let threatFamily = "General Threats";
   if (num <= 6) threatFamily = "Volumetric & Protocol Exhaustion (L3/L4 DDoS)";
   else if (num <= 9) threatFamily = "Reconnaissance & Pre-Attack Probing";
@@ -29,6 +63,9 @@ export const FALLBACK_THREATS: CatalogThreat[] = Object.entries(THREAT_DESCRIPTI
     label: `${scenarioKey} · ${key}`,
     prompt: `Launch ${scenarioKey} (${key}): ${desc}`,
     description: desc,
+    categoryId: num,
+    targetPort: meta.port,
+    protocol: meta.protocol,
   };
 });
 

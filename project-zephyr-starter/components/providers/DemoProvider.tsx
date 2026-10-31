@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useReducer, type ReactNo
 import { SCENARIOS } from "@/data/scenarios";
 import { useBackendSync } from "@/hooks/useBackendSync";
 import { createInitialState, demoReducer, type DemoAction, type DemoState } from "@/lib/demo-state";
+import { LLM_THINKING_DURATION_MS, LLM_THINKING_STEPS, LLM_THINKING_STEP_MS } from "@/lib/terminal-feeds";
 
 /**
  * One provider, mounted in the root layout, so the simulation, alerts,
@@ -26,6 +27,30 @@ export function DemoProvider({ children }: { children: ReactNode }) {
 
   // Live mode: mirror the FastAPI backend (no-op in demo mode).
   useBackendSync(dispatch);
+
+  // 14-Second "LLM Thinking" state machine: advances status message every 3s across 5 steps.
+  const { phase: dramaPhase, attackEpoch } = state.drama;
+  useEffect(() => {
+    if (dramaPhase !== "thinking") return;
+
+    const stepTimers: number[] = [];
+    for (let step = 1; step < LLM_THINKING_STEPS.length; step++) {
+      stepTimers.push(
+        window.setTimeout(() => {
+          dispatch({ type: "drama_thinking_step", step });
+        }, step * LLM_THINKING_STEP_MS),
+      );
+    }
+
+    const doneTimer = window.setTimeout(() => {
+      dispatch({ type: "drama_thinking_complete" });
+    }, LLM_THINKING_DURATION_MS);
+
+    return () => {
+      stepTimers.forEach((id) => window.clearTimeout(id));
+      window.clearTimeout(doneTimer);
+    };
+  }, [dramaPhase, attackEpoch]);
 
   // Scenario runner: applies the next step after its delay while "running".
   const { run, stepIndex, selected } = state.scenario;

@@ -483,6 +483,9 @@ export interface TerminalLine {
   time?: string;
   tag?: string;
   tone?: EventSeverity;
+  isBanner?: boolean;
+  /** Render preprocessed log text verbatim without synthetic [TAG] or timestamp prefixes. */
+  rawOnly?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -503,3 +506,28 @@ export interface Toast {
 /* ------------------------------------------------------------------ */
 
 export type ImplementationStatus = "demo" | "simulated" | "planned";
+
+/* ------------------------------------------------------------------ */
+/* Live Theater / Drama State Machine                                   */
+/* ------------------------------------------------------------------ */
+
+export type DramaPhase = "idle" | "thinking" | "awaiting_decision" | "mitigated";
+
+export interface DramaState {
+  phase: DramaPhase;
+  /** Increments every time "Launch Threat" is clicked (re-triggers CSS screen-shake & rapid red stream). */
+  attackEpoch: number;
+  /** Increments every time "Accept" is clicked (re-triggers React Flow green shield flash & enforced banner). */
+  mitigationEpoch: number;
+  /** Wall-clock ms when the 14s LLM thinking sequence began. */
+  startedAtMs: number | null;
+  /** 0..4 step index into LLM_THINKING_STEPS (advances every 3s). */
+  thinkingStep: number;
+  sourceNode: NodeId;
+  targetNode: DeviceId;
+  sourceIp: string;
+  targetIp: string;
+  targetPort: number;
+  protocol: Protocol;
+  threatSignature: string;
+}

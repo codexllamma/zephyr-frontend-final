@@ -1,24 +1,44 @@
 "use client";
 
 import { useEffect } from "react";
+import { Crosshair } from "lucide-react";
 import { useDemo } from "@/components/providers/DemoProvider";
 import { Segmented } from "@/components/ui/Segmented";
 import { CAMERA_OVERVIEW_EVENT } from "@/hooks/useScrollCamera";
 import { SCENARIOS, SCENARIO_ORDER } from "@/data/scenarios";
-import { cn } from "@/lib/cn";
+import { LLM_THINKING_DURATION_MS } from "@/lib/terminal-feeds";
 
 export function ScenarioControls() {
   const { state, dispatch } = useDemo();
   const sc = state.scenario;
-  const isRunning = sc.run === "running";
+  const isThinking = state.drama.phase === "thinking";
+  const isRunning = sc.run === "running" || isThinking;
 
-  const toggleSimulation = () => {
-    if (isRunning) {
-      dispatch({ type: "scenario_pause" });
-    } else {
-      dispatch({ type: "scenario_start" });
-      window.dispatchEvent(new Event(CAMERA_OVERVIEW_EVENT));
-    }
+  const launchThreat = () => {
+    if (isThinking) return;
+    const now = Date.now();
+    dispatch({
+      type: "drama_attack_start",
+      sourceNode: "ext-net",
+      targetNode: "pc-4",
+      targetPort: 80,
+      protocol: "TCP",
+      threatSignature: "TCP_SYN_VOLUMETRIC",
+      nowMs: now,
+    });
+    window.dispatchEvent(new Event(CAMERA_OVERVIEW_EVENT));
+    window.setTimeout(() => {
+      dispatch({
+        type: "drama_offline_fallback",
+        sourceNode: "ext-net",
+        targetNode: "pc-4",
+        variant: "A",
+        threatSignature: "TCP_SYN_VOLUMETRIC",
+        targetPort: 80,
+        protocol: "TCP",
+        nowMs: Date.now(),
+      });
+    }, LLM_THINKING_DURATION_MS);
   };
 
   useEffect(() => {
@@ -27,7 +47,7 @@ export function ScenarioControls() {
       const t = e.target;
       if (t instanceof HTMLElement && (t.isContentEditable || t.closest("[data-terminal]") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
       e.preventDefault();
-      toggleSimulation();
+      launchThreat();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -46,28 +66,12 @@ export function ScenarioControls() {
       <div className="ml-auto flex items-center justify-end gap-3">
         <button
           type="button"
-          role="switch"
-          aria-checked={isRunning}
-          onClick={toggleSimulation}
-          className="inline-flex items-center gap-2.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-100 transition-colors hover:border-zinc-500"
+          disabled={isThinking}
+          onClick={launchThreat}
+          className="inline-flex h-8 items-center gap-2 rounded-md border border-red-800 bg-red-700 px-3.5 text-xs font-bold tracking-wide text-zinc-100 transition-colors hover:bg-red-600 active:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span>Simulation</span>
-          <span
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
-              isRunning ? "bg-green-600" : "bg-zinc-700",
-            )}
-          >
-            <span
-              className={cn(
-                "inline-block size-3.5 transform rounded-full bg-white transition-transform",
-                isRunning ? "translate-x-4" : "translate-x-1",
-              )}
-            />
-          </span>
-          <span className={cn("font-mono text-[11px]", isRunning ? "text-green-400" : "text-zinc-400")}>
-            {isRunning ? "ON" : "OFF"}
-          </span>
+          <Crosshair aria-hidden className="size-3.5" />
+          <span>{isThinking ? "Threat Active..." : "Launch Threat"}</span>
         </button>
       </div>
     </div>

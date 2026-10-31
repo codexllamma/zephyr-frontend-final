@@ -67,6 +67,9 @@ export function useScrollCamera({ containerRef, stops, bounds, listenForOverview
       const h = el.clientHeight;
       if (!w || !h) return;
       const cam = evaluateCamera(stops, bounds, m.p, w, h);
+      if (!Number.isFinite(cam.x) || !Number.isFinite(cam.y) || !Number.isFinite(cam.zoom) || cam.zoom <= 0) {
+        return;
+      }
       void setViewport({ x: w / 2 - cam.x * cam.zoom, y: h / 2 - cam.y * cam.zoom, zoom: cam.zoom });
       const rounded = Math.round(m.p * 100);
       const key = rounded * 2 + (m.playing ? 1 : 0);
@@ -242,6 +245,8 @@ export function useScrollCamera({ containerRef, stops, bounds, listenForOverview
         m.k = AUTO_STIFFNESS;
         run();
       }, START_DELAY_MS);
+    } else if (Math.abs(m.target - m.p) > 1e-4) {
+      run();
     }
 
     return () => {

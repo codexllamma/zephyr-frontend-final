@@ -103,6 +103,7 @@ export interface NlpAttackResponse {
   attacker?: string;
   target?: string;
   command?: string;
+  mitigation_envelope?: BackendPendingItem | null;
 }
 
 /** Normalised GET /api/v1/catalog (see lib/catalog.ts). */

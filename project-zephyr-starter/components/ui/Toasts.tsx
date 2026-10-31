@@ -37,7 +37,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
 export function ToastViewport() {
   const { state, dispatch } = useDemo();
   return (
-    <div aria-live="polite" aria-label="Notifications" className="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col gap-2">
+    <div aria-live="polite" aria-label="Notifications" className="pointer-events-none fixed bottom-4 left-4 z-[60] flex flex-col gap-2">
       {state.toasts.map((t) => (
         <ToastItem key={t.id} toast={t} onClose={() => dispatch({ type: "toast_dismiss", id: t.id })} />
       ))}

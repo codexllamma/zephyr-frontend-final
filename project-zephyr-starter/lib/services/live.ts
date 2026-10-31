@@ -127,6 +127,48 @@ export const liveApi = {
     }),
 
   /** Phase 4 hybrid NLP router: runs a real attack in Docker and injects the alert + envelope. */
+  mockThreat: (req: {
+    source?: string;
+    target?: string;
+    scenario_id?: string;
+    category_id?: number | string;
+    prompt?: string;
+    force_variant?: string;
+    threat_type?: string;
+  }) =>
+    apiFetch<{
+      status: string;
+      alert_id: string;
+      mode?: string;
+      scenario_id?: string;
+      threat_classification?: string;
+      mitigation_envelope?: unknown;
+    }>("/api/mock/threat", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
+  liveThreat: (req: {
+    source?: string;
+    target?: string;
+    scenario_id?: string;
+    category_id?: number | string;
+    prompt?: string;
+    force_variant?: string;
+    threat_type?: string;
+  }) =>
+    apiFetch<{
+      status: string;
+      alert_id: string;
+      mode?: string;
+      scenario_id?: string;
+      threat_classification?: string;
+      mitigation_envelope?: unknown;
+    }>("/api/live/threat", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+
   simulateNlpAttack: (req: NlpAttackRequest) =>
     apiFetch<NlpAttackResponse>("/api/v1/simulate_nlp_attack", { method: "POST", body: JSON.stringify(req) }),
 
