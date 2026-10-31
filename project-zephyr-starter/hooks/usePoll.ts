@@ -43,8 +43,10 @@ export function usePoll<T>(
         failures = 0;
         dataRef.current(data);
         schedule(intervalMs);
-      } catch (e) {
+      } catch (e: unknown) {
         if (stopped) return;
+        const isAbort = (e instanceof Error && e.name === "AbortError") || (e as { message?: string })?.message === "Request cancelled";
+        if (isAbort) return;
         failures += 1;
         errRef.current?.(e);
         schedule(Math.min(intervalMs * 2 ** Math.min(failures, 2), 12_000));

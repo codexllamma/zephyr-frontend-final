@@ -1,5 +1,5 @@
 import { LIVE_CASE_BUILDERS } from "@/data/live-cases";
-import { BASELINE_FLOWS, REVIEWER, SIM_EPOCH_MS, initialDeviceRuntime } from "@/data/devices";
+import { BASELINE_FLOWS, NODE_IP, REVIEWER, SIM_EPOCH_MS, initialDeviceRuntime } from "@/data/devices";
 import { SCENARIOS } from "@/data/scenarios";
 import { buildSeedCases, makeAttempt } from "@/data/seed-cases";
 import { criticPassed, runCritic } from "@/lib/critic";
@@ -26,17 +26,7 @@ import type {
   TerminalLine,
   Toast,
   ToastTone,
-  ZephyrEvent,
 } from "@/types";
-
-/**
- * Shared demo state. One reducer drives every tab, so the simulation, the
- * alert queue, the decision history, the training pairs and the architecture
- * trace are all views of the same underlying story.
- *
- * The reducer is pure and deterministic: time comes from a simulated clock
- * that only moves when events happen, never from `Date.now()`.
- */
 
 export interface DemoState {
   clockMs: number;
@@ -50,31 +40,26 @@ export interface DemoState {
     stepIndex: number;
     completed: ScenarioId[];
   };
-  events: ZephyrEvent[];
   cases: AlertCase[];
-  /** scenario case key -> alert id, so later steps can find the case they created. */
   liveCaseIds: Record<string, string>;
   selectedAlertId: string | null;
   terminals: Record<DeviceId, TerminalLine[]>;
-  /** Live critical alerts the reviewer has already seen (stops the blinking indicator). */
   acknowledged: string[];
   toasts: Toast[];
-  /** "live" = state mirrors the FastAPI backend; "demo" = local simulation. */
   mode: "demo" | "live";
   backend: BackendState;
-  /** Live only: ext-net and traffic-gen runtime state from network_status. */
   extNodes: Record<ExtNodeId, DeviceRuntime>;
 }
 
 export interface BackendState {
   link: "connecting" | "online" | "error";
   error?: string;
-  /** ISO time of the last successful poll. */
   lastSyncAt?: string;
   executedCount: number;
 }
 
 export type DemoAction =
+  | { type: "set_mode"; mode: "demo" | "live" }
   | { type: "select_device"; id: DeviceId }
   | { type: "select_alert"; id: string | null }
   | { type: "select_scenario"; id: ScenarioId }
@@ -96,12 +81,14 @@ export type DemoAction =
   | { type: "toast_push"; tone: ToastTone; title: string; message?: string }
   | { type: "toast_dismiss"; id: string };
 
-/* ------------------------------------------------------------------ */
-/* Initial state                                                        */
-/* ------------------------------------------------------------------ */
-
 function bannerLines(deviceId: DeviceId, startSeq: number): TerminalLine[] {
-  return terminalBanner(deviceId).map((l, i) => ({ id: `t-${startSeq}-${deviceId}-${i}`, ...l }));
+  return terminalBanner(deviceId).map((l, i) => ({
+    id: `t-${startSeq}-${deviceId}-${i}`,
+    ...l,
+    time: "10:30:00",
+    tag: "ACCEPT",
+    tone: "success",
+  }));
 }
 
 function createLiveState(): DemoState {
@@ -114,7 +101,6 @@ function createLiveState(): DemoState {
     flows: [],
     cases: [],
     selectedDeviceId: "pc-4",
-    events: [],
     backend: { link: "connecting", executedCount: 0 },
     extNodes: { "ext-net": { status: "unknown" }, "traffic-gen": { status: "unknown" } },
   };
@@ -132,17 +118,7 @@ function createDemoState(): DemoState {
     devices: initialDeviceRuntime(),
     flows: BASELINE_FLOWS.map((f) => ({ ...f })),
     selectedDeviceId: "pc-3",
-    scenario: { selected: "normal", run: "idle", stepIndex: 0, completed: [] },
-    events: [
-      {
-        id: "evt-0",
-        ts: isoFromMs(SIM_EPOCH_MS),
-        kind: "system",
-        actor: "system",
-        severity: "info",
-        message: "Demo environment ready: 5 containers on br-zephyr (simulated)",
-      },
-    ],
+    scenario: { selected: "suspicious", run: "idle", stepIndex: 0, completed: [] },
     cases: buildSeedCases(),
     liveCaseIds: {},
     selectedAlertId: null,
@@ -155,10 +131,6 @@ function createDemoState(): DemoState {
   };
 }
 
-/* ------------------------------------------------------------------ */
-/* Helpers                                                              */
-/* ------------------------------------------------------------------ */
-
 const nowIso = (s: DemoState) => isoFromMs(s.clockMs);
 
 function tick(s: DemoState, sec: number): DemoState {
@@ -170,26 +142,24 @@ function addToast(s: DemoState, tone: ToastTone, title: string, message?: string
   return { ...s, seq: s.seq + 1, toasts: [...s.toasts, toast].slice(-3) };
 }
 
-type NewEvent = Omit<ZephyrEvent, "id" | "ts">;
-
-function addEvent(s: DemoState, e: NewEvent): DemoState {
-  const event: ZephyrEvent = { ...e, id: `evt-${s.seq}`, ts: nowIso(s) };
-  const cases = e.alertId
-    ? s.cases.map((c) => (c.id === e.alertId ? { ...c, timeline: [...c.timeline, event] } : c))
-    : s.cases;
-  // Stream every event into all terminals as a coloured log line.
+function appendPacketOutcome(
+  s: DemoState,
+  action: "ACCEPT" | "DROP",
+  detail: string,
+): DemoState {
+  const tone: EventSeverity = action === "DROP" ? "critical" : "success";
   const logLine: TerminalLine = {
-    id: `log-${event.id}`,
+    id: `pkt-${s.seq}`,
     kind: "log",
-    text: event.message,
-    time: fmtTime(event.ts),
-    tag: event.actor.toUpperCase(),
-    tone: event.severity,
+    text: `[${action}] ${detail}`,
+    time: fmtTime(nowIso(s)),
+    tag: action,
+    tone,
   };
   const terminals = Object.fromEntries(
     DEVICE_IDS.map((d) => [d, [...s.terminals[d], logLine].slice(-300)]),
   ) as Record<DeviceId, TerminalLine[]>;
-  return { ...s, seq: s.seq + 1, events: [...s.events, event].slice(-300), cases, terminals };
+  return { ...s, seq: s.seq + 1, terminals };
 }
 
 function updateCase(s: DemoState, id: string, fn: (c: AlertCase) => AlertCase): DemoState {
@@ -204,30 +174,28 @@ function matchesFlow(f: NetworkFlow, c: AlertCase): boolean {
   return f.from === c.alert.source_node && f.to === c.alert.target_node && f.port === c.alert.dest_port;
 }
 
-const sevToEvent = (sev: string): EventSeverity => (sev === "CRITICAL" ? "critical" : sev === "LOW" ? "info" : "warning");
-
-/* ------------------------------------------------------------------ */
-/* Scenario effects                                                     */
-/* ------------------------------------------------------------------ */
-
 function applyEffect(s: DemoState, fx: ScenarioEffect): DemoState {
   switch (fx.type) {
     case "set_flows": {
       const byId = new Map(s.flows.map((f) => [f.id, f]));
       for (const f of fx.flows) byId.set(f.id, { ...f });
-      return { ...s, flows: [...byId.values()] };
+      let next: DemoState = { ...s, flows: [...byId.values()] };
+      for (const f of fx.flows) {
+        const srcIp = NODE_IP[f.from as DeviceId] ?? "172.28.0.100";
+        const dstIp = NODE_IP[f.to] ?? "172.28.0.14";
+        const isDrop = f.pattern === "suspicious" || f.pattern === "blocked";
+        next = appendPacketOutcome(next, isDrop ? "DROP" : "ACCEPT", `${srcIp} -> ${dstIp}:${f.port} PROTO=${f.protocol}`);
+      }
+      return next;
     }
     case "set_device":
       return setDevice(s, fx.deviceId, fx.patch);
-    case "event":
-      return addEvent(s, {
-        kind: fx.kind,
-        actor: fx.actor,
-        severity: fx.severity,
-        message: fx.message,
-        deviceId: fx.deviceId,
-        alertId: fx.alertId,
-      });
+    case "event": {
+      if (fx.kind === "alert" && fx.severity === "success") {
+        return appendPacketOutcome(s, "ACCEPT", "172.28.0.11 -> 172.28.0.13:80 PROTO=TCP");
+      }
+      return s;
+    }
     case "toast":
       return addToast(s, fx.tone, fx.title, fx.message);
     case "set_stage": {
@@ -248,7 +216,6 @@ function applyEffect(s: DemoState, fx: ScenarioEffect): DemoState {
         stage: "detected",
         review: { status: "pending" },
         execution: { status: "not_started", simulated: true },
-        timeline: [],
         provenance: "demo",
         isLive: true,
       };
@@ -258,16 +225,13 @@ function applyEffect(s: DemoState, fx: ScenarioEffect): DemoState {
         liveCaseIds: { ...s.liveCaseIds, [fx.caseKey]: c.id },
         selectedAlertId: c.id,
       };
-      const a = tpl.alert.nids_llm_assessment;
-      next = addEvent(next, {
-        kind: "alert",
-        actor: "nids",
-        severity: sevToEvent(a.severity),
-        message: `NIDS alert ${shortId(c.id)} detected: ${a.attack_signature}`,
-        deviceId: tpl.alert.target_node,
-        alertId: c.id,
-      });
-      return addToast(next, a.severity === "LOW" ? "info" : "warning", "New alert generated", `${a.attack_signature} · ${tpl.alert.source_node} → ${tpl.alert.target_node}`);
+      const isBenign = tpl.alert.nids_llm_assessment.severity === "LOW";
+      next = appendPacketOutcome(
+        next,
+        isBenign ? "ACCEPT" : "DROP",
+        `${tpl.alert.source_ip} -> ${tpl.alert.target_ip}:${tpl.alert.dest_port} PROTO=${tpl.alert.protocol ?? "TCP"}`,
+      );
+      return next;
     }
     case "reveal_attempt": {
       const id = s.liveCaseIds[fx.caseKey];
@@ -275,87 +239,50 @@ function applyEffect(s: DemoState, fx: ScenarioEffect): DemoState {
       const existing = s.cases.find((c) => c.id === id);
       if (!id || !tpl || !existing) return s;
       if (existing.attempts.some((a) => a.index === fx.attemptIndex)) return s;
-      // Rebuild the template at the alert's own timestamp so envelopes stay grounded.
       const built = tpl(existing.alert.timestamp);
       const envelope = built.envelopes[fx.attemptIndex - 1];
       if (!envelope) return s;
       const attempt = makeAttempt(fx.attemptIndex, existing.alert, envelope, nowIso(s));
-      const action = envelope.chosen_mitigation.action_type;
       let next = updateCase(s, id, (c) => ({
         ...c,
         attempts: [...c.attempts, attempt],
         stage: attempt.passed ? "awaiting_review" : c.stage,
       }));
-      next = addEvent(next, {
-        kind: "proposal",
-        actor: "model",
-        severity: "info",
-        message: `Model proposal created${fx.attemptIndex > 1 ? ` (attempt ${fx.attemptIndex})` : ""}: ${action} on ${envelope.chosen_mitigation.target_container}`,
-        alertId: id,
-      });
       next = tick(next, 1);
-      if (attempt.passed) {
-        next = addEvent(next, {
-          kind: "validation",
-          actor: "critic",
-          severity: "success",
-          message: `Critic validation passed${fx.attemptIndex > 1 ? ` (attempt ${fx.attemptIndex})` : ""}: all 5 checks`,
-          alertId: id,
-        });
-        return addToast(next, "info", "Proposal validated", "Awaiting human review in Alerts & Review");
-      }
-      const failed = attempt.checks.filter((k) => k.status === "failed");
-      next = addEvent(next, {
-        kind: "validation",
-        actor: "critic",
-        severity: "critical",
-        message: `Critic rejected attempt ${fx.attemptIndex}: ${failed.length} check(s) failed (${failed.map((k) => k.id).join(", ")})`,
-        alertId: id,
-      });
-      next = addEvent(next, {
-        kind: "validation",
-        actor: "critic",
-        severity: "warning",
-        message: `Correction loop: ${attempt.correctionFeedback.length} deterministic error(s) sent back to the model for a retry`,
-        alertId: id,
-      });
-      return addToast(next, "danger", "Validation check failed", `Critic blocked attempt ${fx.attemptIndex}; the model is retrying.`);
+      return next;
     }
     default:
       return s;
   }
 }
 
-/* ------------------------------------------------------------------ */
-/* Review + execution pipeline                                          */
-/* ------------------------------------------------------------------ */
-
 type Outcome = "blocked" | "limited" | "accepted" | "benign";
 
 function applyNetworkOutcome(s: DemoState, c: AlertCase, outcome: Outcome): DemoState {
   if (!c.isLive) return s;
-  const { source_node: src, target_node: dst, dest_port: port } = c.alert;
+  const { source_node: src, target_node: dst, source_ip: srcIp, target_ip: dstIp, dest_port: port, protocol } = c.alert;
+  const proto = protocol ?? "TCP";
   let next: DemoState = { ...s };
   switch (outcome) {
     case "blocked":
       next.flows = s.flows.map((f) => (matchesFlow(f, c) ? { ...f, pattern: "blocked", pps: 0 } : f));
       next = setDevice(next, dst, { status: "healthy" });
-      next = addEvent(next, { kind: "traffic", actor: "executor", severity: "success", message: `${src} → ${dst}:${port} blocked inside ${dst} (simulated). ${dst} is healthy again; ${src} stays flagged.`, deviceId: dst, alertId: c.id });
+      next = appendPacketOutcome(next, "DROP", `${srcIp} -> ${dstIp}:${port} PROTO=${proto}`);
       break;
     case "limited":
       next.flows = s.flows.map((f) => (matchesFlow(f, c) ? { ...f, pattern: "routine", pps: 20 } : f));
       next = setDevice(next, dst, { status: "healthy" });
-      next = addEvent(next, { kind: "traffic", actor: "executor", severity: "success", message: `${src} → ${dst}:${port} rate-limited to 20 SYN/s inside ${dst} (simulated)`, deviceId: dst, alertId: c.id });
+      next = appendPacketOutcome(next, "DROP", `${srcIp} -> ${dstIp}:${port} PROTO=${proto}`);
       break;
     case "accepted":
       next = setDevice(next, dst, { status: "healthy" });
-      next = addEvent(next, { kind: "traffic", actor: "system", severity: "success", message: `${dst} back to healthy: the surge was accepted as legitimate traffic and left untouched`, deviceId: dst, alertId: c.id });
+      next = appendPacketOutcome(next, "ACCEPT", `${srcIp} -> ${dstIp}:${port} PROTO=${proto}`);
       break;
     case "benign":
       next.flows = s.flows.map((f) => (matchesFlow(f, c) ? { ...f, pattern: "routine" } : f));
       next = setDevice(next, dst, { status: "healthy" });
       next = setDevice(next, src as DeviceId, { status: "healthy" });
-      next = addEvent(next, { kind: "traffic", actor: "system", severity: "success", message: `${src} and ${dst} returned to healthy: traffic labelled benign by the reviewer`, deviceId: dst, alertId: c.id });
+      next = appendPacketOutcome(next, "ACCEPT", `${srcIp} -> ${dstIp}:${port} PROTO=${proto}`);
       break;
   }
   return next;
@@ -372,11 +299,11 @@ function reviewCase(s: DemoState, caseId: string, decision: ReviewDecision, note
   const decidedAt = nowIso(next);
   const id = shortId(c.id);
 
-  const map: Record<ReviewDecision, { status: AlertCase["review"]["status"]; stage: LifecycleStage; verb: string; sev: EventSeverity }> = {
-    approve: { status: "approved", stage: "validating", verb: "approved the proposal", sev: "success" },
-    reject: { status: "rejected", stage: "rejected", verb: "rejected the proposal", sev: "warning" },
-    request_revision: { status: "revision_requested", stage: "revision_requested", verb: "requested a revision", sev: "warning" },
-    mark_benign: { status: "marked_benign", stage: "marked_benign", verb: "marked the traffic as benign", sev: "success" },
+  const map: Record<ReviewDecision, { status: AlertCase["review"]["status"]; stage: LifecycleStage; verb: string }> = {
+    approve: { status: "approved", stage: "validating", verb: "approved the proposal" },
+    reject: { status: "rejected", stage: "rejected", verb: "rejected the proposal" },
+    request_revision: { status: "revision_requested", stage: "revision_requested", verb: "requested a revision" },
+    mark_benign: { status: "marked_benign", stage: "marked_benign", verb: "marked the traffic as benign" },
   };
   const m = map[decision];
   const noAction = decision !== "approve";
@@ -398,18 +325,21 @@ function reviewCase(s: DemoState, caseId: string, decision: ReviewDecision, note
         }
       : { status: "pending", simulated: true, message: "Awaiting final validation and execution (simulated)." },
   }));
-  next = addEvent(next, { kind: "review", actor: "reviewer", severity: m.sev, message: `${REVIEWER} ${m.verb}${note?.trim() ? ` — "${note.trim()}"` : ""}`, alertId: caseId });
   next = tick(next, 1);
-  next = addEvent(next, {
-    kind: "record",
-    actor: "system",
-    severity: "info",
-    message:
-      decision === "approve" || decision === "mark_benign"
-        ? "Decision saved; chosen/rejected pair recorded for GRPO training"
-        : "Decision saved; pair excluded from training until a usable label exists",
-    alertId: caseId,
-  });
+  if (decision === "approve") {
+    const isNoOp = attempt.envelope.chosen_mitigation.action_type === "NO_OP";
+    next = appendPacketOutcome(
+      next,
+      isNoOp ? "ACCEPT" : "DROP",
+      `${c.alert.source_ip} -> ${c.alert.target_ip}:${c.alert.dest_port} PROTO=${c.alert.protocol ?? "TCP"}`,
+    );
+  } else if (decision === "reject" || decision === "mark_benign") {
+    next = appendPacketOutcome(
+      next,
+      "ACCEPT",
+      `${c.alert.source_ip} -> ${c.alert.target_ip}:${c.alert.dest_port} PROTO=${c.alert.protocol ?? "TCP"}`,
+    );
+  }
   next = addToast(next, decision === "approve" || decision === "mark_benign" ? "success" : "info", "Review decision recorded", `${REVIEWER} ${m.verb} (${id})`);
 
   if (decision === "mark_benign") next = applyNetworkOutcome(next, c, "benign");
@@ -429,11 +359,9 @@ function advancePipeline(s: DemoState, caseId: string): DemoState {
     const checks = runCritic(attempt.envelope, c.alert);
     if (!criticPassed(checks)) {
       next = updateCase(next, caseId, (x) => ({ ...x, stage: "rejected", execution: { status: "not_applicable", simulated: true, message: "Final validation failed: nothing applied." } }));
-      next = addEvent(next, { kind: "validation", actor: "critic", severity: "critical", message: "Final Critic re-validation failed: execution blocked", alertId: caseId });
       return addToast(next, "danger", "Validation check failed", "Final Critic re-validation blocked execution.");
     }
-    next = updateCase(next, caseId, (x) => ({ ...x, stage: "approved" }));
-    return addEvent(next, { kind: "validation", actor: "critic", severity: "success", message: "Final Critic re-validation passed: approved for execution", alertId: caseId });
+    return updateCase(next, caseId, (x) => ({ ...x, stage: "approved" }));
   }
 
   if (c.stage === "approved") {
@@ -444,12 +372,9 @@ function advancePipeline(s: DemoState, caseId: string): DemoState {
         stage: "executed",
         execution: { status: "not_applicable", simulated: true, finishedAt: nowIso(next), message: "NO_OP approved: monitoring continues, no firewall change applied." },
       }));
-      next = addEvent(next, { kind: "execution", actor: "executor", severity: "info", message: "NO_OP recorded: no firewall change applied", alertId: caseId });
-      next = addToast(next, "success", "Simulated action completed", "NO_OP recorded; no firewall change was needed.");
       return applyNetworkOutcome(next, c, "accepted");
     }
-    next = updateCase(next, caseId, (x) => ({ ...x, stage: "executing" }));
-    return addEvent(next, { kind: "execution", actor: "executor", severity: "info", message: `Executing inside ${action.target_container} namespace (simulated): ${action.iptables_cmd}`, deviceId: action.target_container, alertId: caseId });
+    return updateCase(next, caseId, (x) => ({ ...x, stage: "executing" }));
   }
 
   if (c.stage === "executing") {
@@ -465,19 +390,15 @@ function advancePipeline(s: DemoState, caseId: string): DemoState {
         message: `Rule applied in ${action.target_container} namespace (simulated).`,
       },
     }));
-    next = addEvent(next, { kind: "execution", actor: "executor", severity: "success", message: `Execution confirmed (simulated): rule applied in ${action.target_container}`, deviceId: action.target_container, alertId: caseId });
-    next = addToast(next, "success", "Simulated action completed", `Rule applied in ${action.target_container} (simulated, not a real container).`);
     return applyNetworkOutcome(next, c, action.action_type === "RATE_LIMIT_SYN" ? "limited" : "blocked");
   }
   return s;
 }
 
-/* ------------------------------------------------------------------ */
-/* Reducer                                                              */
-/* ------------------------------------------------------------------ */
-
 export function demoReducer(s: DemoState, a: DemoAction): DemoState {
   switch (a.type) {
+    case "set_mode":
+      return a.mode === s.mode ? s : a.mode === "live" ? createLiveState() : createDemoState();
     case "select_device":
       return { ...s, selectedDeviceId: a.id };
     case "select_alert":
@@ -490,7 +411,13 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
       const sc = s.scenario;
       if (sc.run === "running") return s;
       if (sc.run === "paused") return { ...s, scenario: { ...sc, run: "running" } };
-      if (sc.completed.includes(sc.selected)) return s;
+      if (sc.completed.includes(sc.selected)) {
+        return {
+          ...s,
+          liveCaseIds: {},
+          scenario: { ...sc, run: "running", stepIndex: 0, completed: sc.completed.filter((id) => id !== sc.selected) },
+        };
+      }
       return { ...s, scenario: { ...sc, run: "running", stepIndex: 0 } };
     }
     case "scenario_pause":
@@ -516,8 +443,7 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
       };
     }
     case "reset": {
-      const fresh = createInitialState();
-      return addToast(fresh, "info", "Demo reset", "Scenario state, decisions and history restored to the initial fixtures.");
+      return s.mode === "live" ? createLiveState() : createDemoState();
     }
 
     case "review":
@@ -525,14 +451,12 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
     case "return_to_queue": {
       const c = s.cases.find((x) => x.id === a.caseId);
       if (!c || c.stage !== "revision_requested") return s;
-      let next = updateCase(s, a.caseId, (x) => ({
+      return updateCase(s, a.caseId, (x) => ({
         ...x,
         stage: "awaiting_review",
         review: { status: "pending" },
         execution: { status: "not_started", simulated: true },
       }));
-      next = addEvent(tick(next, 5), { kind: "review", actor: "reviewer", severity: "info", message: `${REVIEWER} returned the alert to the review queue`, alertId: a.caseId });
-      return next;
     }
     case "pipeline_advance":
       return advancePipeline(s, a.caseId);
@@ -542,18 +466,10 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
       if (!c || !attempt) return s;
       const checks = runCritic(attempt.envelope, c.alert);
       const passed = criticPassed(checks);
-      let next = updateCase(s, a.caseId, (x) => ({
+      return updateCase(s, a.caseId, (x) => ({
         ...x,
         attempts: x.attempts.map((t) => (t.index === attempt.index ? { ...t, checks, passed } : t)),
       }));
-      next = addEvent(tick(next, 1), {
-        kind: "validation",
-        actor: "critic",
-        severity: passed ? "success" : "critical",
-        message: `Critic re-run on attempt ${attempt.index}: ${passed ? "all 5 checks passed" : "checks failed"} (deterministic: same input, same verdict)`,
-        alertId: a.caseId,
-      });
-      return next;
     }
 
     case "terminal_result": {
@@ -575,6 +491,7 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
       return fresh.length ? { ...s, acknowledged: [...s.acknowledged, ...fresh] } : s;
     }
     case "live_sync": {
+      if (s.mode !== "live") return s;
       const net = mapNetworkStatus(a.snapshot.network_status);
       const iso = isoFromMs(a.nowMs);
       const known = new Map(s.cases.map((c) => [c.id, c]));
@@ -604,7 +521,6 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
             },
           };
         });
-      // Keep any locally-resolved cases from this session that aren't in historyRecords yet
       const localResolved = s.cases.filter(
         (c) =>
           c.stage !== "awaiting_review" &&
@@ -635,24 +551,21 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
       };
       for (const c of pendingCases) {
         if (known.has(c.id)) continue;
-        next = addEvent(next, {
-          kind: "alert",
-          actor: "nids",
-          severity: sevToEvent(c.alert.nids_llm_assessment.severity),
-          message: `New backend alert ${shortId(c.id)}: ${c.alert.nids_llm_assessment.attack_signature} (${c.alert.source_node} to ${c.alert.target_node})`,
-          alertId: c.id,
-        });
+        next = appendPacketOutcome(
+          next,
+          "DROP",
+          `${c.alert.source_ip} -> ${c.alert.target_ip}:${c.alert.dest_port} PROTO=${c.alert.protocol ?? "TCP"}`,
+        );
       }
       return next;
     }
     case "live_error": {
-      const was = s.backend.link;
-      let next: DemoState = { ...s, clockMs: a.nowMs, backend: { ...s.backend, link: "error", error: a.message } };
-      if (was !== "error") next = addToast(next, "danger", "Backend unreachable", a.message);
-      return next;
+      if (s.mode !== "live") return s;
+      return { ...s, clockMs: a.nowMs, backend: { ...s.backend, link: "error", error: a.message } };
     }
     case "live_resolved": {
       const iso = isoFromMs(a.nowMs);
+      const targetCase = s.cases.find((c) => c.id === a.alertId);
       const updatedCases = s.cases.map((c) => {
         if (c.id !== a.alertId) return c;
         const chosenCmd = a.cmd ?? c.attempts[0]?.envelope.chosen_mitigation.iptables_cmd ?? "";
@@ -688,19 +601,17 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
         selectedAlertId: s.selectedAlertId ?? a.alertId,
         backend: { ...s.backend, executedCount: s.backend.executedCount + (a.approved ? 1 : 0) },
       };
-      next = addEvent(next, {
-        kind: "review",
-        actor: "reviewer",
-        severity: a.approved ? "success" : "info",
-        message: a.approved
-          ? `${REVIEWER} approved & executed ${shortId(a.alertId)}: ${a.cmd ?? a.status}`
-          : `${REVIEWER} rejected ${shortId(a.alertId)}; no firewall change applied`,
-        alertId: a.alertId,
-      });
+      if (targetCase) {
+        next = appendPacketOutcome(
+          next,
+          a.approved ? "DROP" : "ACCEPT",
+          `${targetCase.alert.source_ip} -> ${targetCase.alert.target_ip}:${targetCase.alert.dest_port} PROTO=${targetCase.alert.protocol ?? "TCP"}`,
+        );
+      }
       return next;
     }
     case "live_attack":
-      return addEvent({ ...s, clockMs: a.nowMs }, { kind: "scenario", actor: "system", severity: "warning", message: a.message });
+      return { ...s, clockMs: a.nowMs };
     case "toast_push":
       return addToast(s, a.tone, a.title, a.message);
     case "toast_dismiss":

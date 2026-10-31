@@ -1,0 +1,20 @@
+System Role: You are an expert React/Next.js frontend engineer using Tailwind CSS. Refactor the existing Zephyr NIDS dashboard to meet the strict layout, styling, and functional constraints below. Do not add boilerplate; output the precise structural changes and component logic.
+1. Layout Engine: React Flow & Terminal Pairing
+ * Positioning: Place the Live Terminal component exactly adjacent (side-by-side) to the React Flow nodes component.
+ * Strict Sizing: The Terminal and React Flow components must be exactly the same size. Wrap them in a strict CSS Grid (grid-cols-2) or Flexbox container (flex-1 for both), ensuring they share the exact same height (h-full, min-h-0 to prevent overflow rendering issues).
+2. Live Terminal (Aesthetic & Content)
+ * Styling: Strip all neon, glow, or drop-shadow effects. Build a serious, plain Linux terminal (matte bg-zinc-950, flat monospace font).
+ * Verbosity: Keep logs brutally minimal. Only render critical packet outcomes (e.g., standard red for [DROP] and standard green for [ACCEPT]). No verbose routing or system data.
+3. Device Component Tooltips
+ * Hover State: Modify the device nodes (within React Flow). Implement a clean tooltip or hover state that instantly displays the device's IP address when hovered over.
+4. Component Deletions
+ * Event Timeline: Completely remove the Event Timeline component from the application state and DOM.
+5. Alert System (Full-Screen Overlay Modal)
+ * Positioning Shift: Remove the Alert panel from its previous inline layout location.
+ * Overlay Logic: Implement the Alert as a full-screen modal/overlay (fixed inset-0 z-50 bg-black/80).
+ * Trigger Timing: This overlay must trigger and appear after the terminal logs have executed and displayed (representing the system pausing for the HITL decision).
+ * UI/UX: The modal content must be radically non-verbose. Display only the exact rule and the concise violation reason.
+ * Controls: Place massive, highly intuitive "Accept" (Green) and "Reject" (Red) buttons pinned to the bottom of the modal container.
+6. Header & Control Bar Adjustments
+ * Header: Strip all unnecessary badges, scenario labels, and visual clutter from the top header. Keep it strictly minimalist.
+ * Simulation Toggle: Refactor the simulation toggle switch to be simple and highly legible. Force it to align to the absolute rightmost edge of its control bar (e.g., ml-auto or justify-end).

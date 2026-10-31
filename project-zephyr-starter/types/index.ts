@@ -273,17 +273,6 @@ export type EventSeverity = "info" | "warning" | "critical" | "success";
 
 export type EventActor = "system" | "nids" | "model" | "critic" | "reviewer" | "executor";
 
-export interface ZephyrEvent {
-  id: string;
-  ts: string;
-  kind: EventKind;
-  actor: EventActor;
-  severity: EventSeverity;
-  message: string;
-  deviceId?: DeviceId;
-  alertId?: string;
-}
-
 export interface EvidenceItem {
   label: string;
   value: string;
@@ -358,8 +347,6 @@ export interface AlertCase {
   stage: LifecycleStage;
   review: ReviewState;
   execution: ExecutionResult;
-  /** Chronological history of this alert. */
-  timeline: ZephyrEvent[];
   provenance: DataProvenance;
   /** Live backend only: variant, Q-score, circuit breaker, telemetry vector, postmortem. */
   backendMeta?: BackendMeta;

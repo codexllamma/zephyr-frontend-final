@@ -1,136 +1,123 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { RotateCcw, ShieldQuestion } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { RotateCcw } from "lucide-react";
 import { useDemo } from "@/components/providers/DemoProvider";
-import { Button } from "@/components/ui/Button";
 import { requestSync } from "@/hooks/useBackendSync";
 import { usePoll } from "@/hooks/usePoll";
 import { fmtTime } from "@/lib/format";
 import { liveApi } from "@/lib/services/live";
-import type { EventSeverity, TerminalLine } from "@/types";
+import type { TerminalLine } from "@/types";
 import type { BackendLogEntry } from "@/types/backend";
 import { TerminalPanel } from "./TerminalPanel";
 
-const RULES_NODE = "pc-4";
-const MAX_LINES = 300;
+const MAX_LINES = 200;
 
-function toneOf(level: string | undefined): EventSeverity {
-  switch ((level ?? "").toUpperCase()) {
-    case "WARN":
-    case "WARNING":
-      return "warning";
-    case "ALERT":
-    case "ERROR":
-    case "CRITICAL":
-    case "FATAL":
-      return "critical";
-    case "SUCCESS":
-    case "OK":
-      return "success";
-    case "CMD":
-    default:
-      return "info";
+function toMinimalOutcomeLine(e: BackendLogEntry): TerminalLine | null {
+  const raw = (e.text ?? "").trim();
+  if (!raw) return null;
+  const lvl = (e.level ?? "").toUpperCase();
+
+  // Ignore verbose routing, system startup, and ASCII banners
+  if (/^(Chain\s|target\s+prot|===|---|\[SYSTEM\]|Router\s+tier|Initializing)/i.test(raw)) {
+    return null;
   }
-}
 
-function toLine(e: BackendLogEntry): TerminalLine {
+  const isDrop =
+    lvl === "ALERT" ||
+    lvl === "CRITICAL" ||
+    lvl === "ERROR" ||
+    lvl === "WARN" ||
+    lvl === "WARNING" ||
+    /\b(DROP|REJECT|BLOCK|SYN_FLOOD|FLOOD|ATTACK|DENIED)\b/i.test(raw);
+
+  const isAccept =
+    !isDrop &&
+    (lvl === "SUCCESS" ||
+      lvl === "OK" ||
+      /\b(ACCEPT|200\s*OK|HTTP\s*200|SLA\s*INTACT|BENIGN)\b/i.test(raw));
+
+  if (!isDrop && !isAccept) return null;
+
   const ts = e.timestamp ?? "";
+  const time = /^\d{4}-\d{2}-\d{2}T/.test(ts) ? fmtTime(ts) : ts;
+  const tag = isDrop ? "DROP" : "ACCEPT";
+  const cleaned = raw
+    .replace(/^\[(DROP|ACCEPT|ALERT|SUCCESS|WARN|WARNING|INFO|CMD|LOG|CRITICAL|ERROR)\]\s*/i, "")
+    .slice(0, 120);
+
   return {
     id: `be-${e.id}`,
     kind: "log",
-    text: e.text,
-    time: /^\d{4}-\d{2}-\d{2}T/.test(ts) ? fmtTime(ts) : ts,
-    tag: (e.level ?? "log").toUpperCase(),
-    tone: toneOf(e.level),
+    text: `[${tag}] ${cleaned}`,
+    time,
+    tag,
+    tone: isDrop ? "critical" : "success",
   };
 }
 
-/** Live container terminal: streams GET /api/v1/terminal/logs, plus rules check and environment reset. */
-export function LiveTerminal({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+export function LiveTerminal() {
   const { state, dispatch } = useDemo();
-  const [lines, setLines] = useState<TerminalLine[]>([]);
-  const [busy, setBusy] = useState<"rules" | "reset" | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
+  const [backendLines, setBackendLines] = useState<TerminalLine[]>([]);
+  const [busy, setBusy] = useState(false);
   const cleared = useRef(new Set<string>());
-  const confirmTimer = useRef<number | undefined>(undefined);
 
   const { refresh } = usePoll(
     (signal) => liveApi.getLogs(signal),
-    (d) => setLines((d.logs ?? []).map(toLine).filter((l) => !cleared.current.has(l.id)).slice(-MAX_LINES)),
-    { intervalMs: 1000, enabled: true },
+    (d) => {
+      const parsed = (d.logs ?? [])
+        .map(toMinimalOutcomeLine)
+        .filter((l): l is TerminalLine => l !== null && !cleared.current.has(l.id))
+        .slice(-MAX_LINES);
+      setBackendLines(parsed);
+    },
+    { intervalMs: 1000, enabled: state.mode === "live" },
   );
 
-  const toast = (tone: "success" | "danger", title: string, message?: string) => dispatch({ type: "toast_push", tone, title, message });
-
-  const verifyRules = async () => {
-    if (busy) return;
-    setBusy("rules");
-    try {
-      await liveApi.getRules(RULES_NODE);
-      toast("success", `Firewall rules requested (${RULES_NODE})`, "The iptables output is streaming into the terminal.");
-      refresh();
-    } catch (e) {
-      toast("danger", "Could not read firewall rules", e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const localLines = state.terminals[state.selectedDeviceId] ?? [];
+  const combinedLines = useMemo(() => {
+    const merged = [...localLines.filter((l) => !cleared.current.has(l.id)), ...backendLines];
+    return merged.slice(-MAX_LINES);
+  }, [localLines, backendLines]);
 
   const reset = async () => {
     if (busy) return;
-    if (!confirmReset) {
-      setConfirmReset(true);
-      window.clearTimeout(confirmTimer.current);
-      confirmTimer.current = window.setTimeout(() => setConfirmReset(false), 5000);
-      return;
-    }
-    window.clearTimeout(confirmTimer.current);
-    setConfirmReset(false);
-    setBusy("reset");
+    setBusy(true);
     try {
       await liveApi.resetEnvironment();
-      toast("success", "Environment reset", "Firewall rules flushed, attack processes stopped, state cleared.");
       refresh();
       requestSync();
-    } catch (e) {
-      toast("danger", "Reset failed", e instanceof Error ? e.message : "Unknown error");
+    } catch {
+      // ignore
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
   const actions = (
-    <>
-      <Button size="sm" onClick={verifyRules} disabled={!!busy} title={`GET /api/v1/terminal/rules?node=${RULES_NODE}`}>
-        <ShieldQuestion aria-hidden className="size-3.5" /> <span className="hidden sm:inline">Verify Firewall Rules ({RULES_NODE})</span>
-        <span className="sm:hidden">Rules</span>
-      </Button>
-      <Button
-        size="sm"
-        variant={confirmReset ? "danger" : "secondary"}
-        onClick={reset}
-        disabled={busy === "rules"}
-        title="Flushes all container firewall rules, stops attack processes and resets backend state"
-      >
-        <RotateCcw aria-hidden className="size-3.5" />
-        {busy === "reset" ? "Resetting…" : confirmReset ? "Confirm reset?" : <><span className="hidden sm:inline">Reset Environment</span><span className="sm:hidden">Reset</span></>}
-      </Button>
-    </>
+    <button
+      type="button"
+      onClick={reset}
+      disabled={busy}
+      title="Reset environment"
+      className="flex h-6 items-center gap-1 rounded px-1.5 font-mono text-[11px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 disabled:opacity-50"
+    >
+      <RotateCcw aria-hidden className="size-3" />
+      {busy ? "..." : "reset"}
+    </button>
   );
 
   return (
     <TerminalPanel
       live
       deviceId={state.selectedDeviceId}
-      lines={lines}
+      lines={combinedLines}
       onSubmit={() => {}}
       onClear={() => {
-        for (const l of lines) cleared.current.add(l.id);
-        setLines([]);
+        for (const l of combinedLines) cleared.current.add(l.id);
+        setBackendLines([]);
+        dispatch({ type: "terminal_clear", deviceId: state.selectedDeviceId });
       }}
-      collapsed={collapsed}
-      onToggle={onToggle}
       actions={actions}
     />
   );

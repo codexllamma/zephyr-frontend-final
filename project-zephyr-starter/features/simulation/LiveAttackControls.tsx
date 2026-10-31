@@ -1,65 +1,61 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Play } from "lucide-react";
 import { useDemo } from "@/components/providers/DemoProvider";
-import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
 import { CAMERA_OVERVIEW_EVENT } from "@/hooks/useScrollCamera";
 import { requestSync } from "@/hooks/useBackendSync";
 import { liveApi } from "@/lib/services/live";
 import { FALLBACK_SOURCES, FALLBACK_TARGETS, normalizeCatalog } from "@/lib/catalog";
-import type { Catalog, CatalogThreat, NlpAttackResponse, VariantMode } from "@/types/backend";
+import { cn } from "@/lib/cn";
+import type { Catalog, CatalogThreat, VariantMode } from "@/types/backend";
 
 const MAX_PROMPT = 500;
-const VARIANTS: { value: VariantMode; label: string; hint: string }[] = [
-  { value: "RANDOM", label: "RANDOM", hint: "Randomly selects between Golden Rule (A/D) and Circuit Breaker trap (B/C)." },
-  { value: "A", label: "A · Golden Rule", hint: "Golden rule (Q ≥ 0.95): passes the safety gates." },
-  { value: "B", label: "B · Subnet Drop", hint: "Blanket /16 drop (Q < 0.75): triggers the Blast Radius circuit breaker." },
-  { value: "C", label: "C · Syntax Error", hint: "Invalid iptables syntax (Q < 0.30): triggers the Grammar circuit breaker." },
+const VARIANTS: { value: VariantMode; label: string }[] = [
+  { value: "RANDOM", label: "RANDOM" },
+  { value: "A", label: "A · Golden" },
+  { value: "B", label: "B · Subnet" },
+  { value: "C", label: "C · Syntax" },
 ];
-const field = "mt-1 h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-xs text-fg placeholder:text-subtle aria-[invalid=true]:border-danger";
+const field = "h-8 rounded-md border border-border bg-elevated px-2.5 text-xs text-fg placeholder:text-subtle aria-[invalid=true]:border-danger";
 
-/** Zone 1: Red Team Threat Launcher (GET /api/v1/catalog & POST /api/v1/simulate_nlp_attack). */
 export function LiveAttackControls() {
-  const { dispatch } = useDemo();
+  const { state, dispatch } = useDemo();
   const [source, setSource] = useState<string>("ext-net");
   const [target, setTarget] = useState<string>("pc-4");
   const [prompt, setPrompt] = useState("Launch SCENARIO_1 (TCP_SYN_VOLUMETRIC): Floods the target with half-open connections to exhaust kernel connection tracking tables.");
   const [variant, setVariant] = useState<VariantMode>("RANDOM");
-  const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [catalogNote, setCatalogNote] = useState<string>("Loading attack catalog from http://localhost:8000/api/v1/catalog…");
+  const [catalog, setCatalog] = useState<Catalog | null>(() => normalizeCatalog({}));
   const [threat, setThreat] = useState("SCENARIO_1");
   const [busy, setBusy] = useState(false);
-  const [last, setLast] = useState<NlpAttackResponse | null>(null);
+  const [simActive, setSimActive] = useState(false);
   const mounted = useRef(true);
   useEffect(() => () => void (mounted.current = false), []);
 
-  // Zone 1 Initial Load: Fetch GET http://localhost:8000/api/v1/catalog exactly once on component mount.
   useEffect(() => {
     const ctrl = new AbortController();
     liveApi
       .getCatalog(ctrl.signal)
       .then((raw) => {
+        if (!mounted.current) return;
         const c = normalizeCatalog(raw);
         setCatalog(c);
         if (c.threats.length > 0) {
           const first = c.threats[0];
           setThreat(first.scenarioKey);
           setPrompt(first.prompt);
-          setCatalogNote(`Catalog loaded: ${c.threats.length} threat scenarios across ${new Set(c.threats.map((t) => t.threatFamily)).size} threat families.`);
-        } else {
-          setCatalogNote("Catalog loaded; describe the attack in text.");
         }
       })
-      .catch((e) => {
-        if (!ctrl.signal.aborted) setCatalogNote(`Catalog unavailable (${e instanceof Error ? e.message : "error"}); using built-in node lists.`);
+      .catch((e: unknown) => {
+        if (!mounted.current) return;
+        const isAbort = (e instanceof Error && e.name === "AbortError") || (e as { message?: string })?.message === "Request cancelled";
+        if (isAbort) return;
+        const fallback = normalizeCatalog({});
+        setCatalog(fallback);
       });
     return () => ctrl.abort();
   }, []);
 
-  // Group threats by `threat_family` for optical groupings (<optgroup>) in the dropdown
   const groupedThreats = useMemo(() => {
     const groups = new Map<string, CatalogThreat[]>();
     for (const t of catalog?.threats ?? []) {
@@ -74,18 +70,16 @@ export function LiveAttackControls() {
   const sources = catalog?.sources.length ? catalog.sources : FALLBACK_SOURCES;
   const targets = catalog?.targets.length ? catalog.targets : FALLBACK_TARGETS;
   const trimmed = prompt.trim();
-  const problem = !trimmed
-    ? "Select a scenario from the catalog or describe the attack."
-    : trimmed.length > MAX_PROMPT
-      ? `Prompt is too long (max ${MAX_PROMPT} characters).`
-      : source === target
-        ? "Source and target must be different nodes."
-        : null;
+  const problem = !trimmed || trimmed.length > MAX_PROMPT || source === target;
   const canRun = !busy && !problem;
+
+  const hasPendingAlert = state.cases.some((c) => c.stage === "awaiting_review");
+  const isActive = busy || simActive || hasPendingAlert || state.scenario.run === "running";
 
   const run = async () => {
     if (!canRun) return;
     setBusy(true);
+    setSimActive(true);
     try {
       const res = await liveApi.simulateNlpAttack({
         source,
@@ -94,31 +88,39 @@ export function LiveAttackControls() {
         force_variant: variant,
         auto_inject_alert: true,
       });
-      setLast(res);
       const what = res.threat_classification ?? res.scenario_id ?? "attack";
       dispatch({
         type: "live_attack",
         nowMs: Date.now(),
-        message: `Live attack launched: ${what} from ${res.attacker ?? source} against ${res.target ?? target}${res.router_tier ? ` (router ${res.router_tier}` : ""}${res.selected_variant_mode ? `, variant ${res.selected_variant_mode})` : res.router_tier ? ")" : ""}${res.alert_id ? `, alert ${res.alert_id}` : ""}`,
-      });
-      dispatch({
-        type: "toast_push",
-        tone: "success",
-        title: "Attack launched",
-        message: `${what}${res.selected_variant_mode ? ` · variant ${res.selected_variant_mode}` : ""}${res.alert_id ? ` · ${res.alert_id}` : ""}. Alert queued in HITL Guardrail.`,
+        message: `Live attack launched: ${what}`,
       });
       window.dispatchEvent(new Event(CAMERA_OVERVIEW_EVENT));
       requestSync();
       window.setTimeout(requestSync, 800);
       window.setTimeout(requestSync, 1600);
-    } catch (e) {
-      dispatch({ type: "toast_push", tone: "danger", title: "Attack failed to start", message: e instanceof Error ? e.message : "Unknown error" });
+    } catch {
+      // Fallback to local simulation if backend is offline
+      dispatch({ type: "set_mode", mode: "demo" });
+      window.setTimeout(() => dispatch({ type: "scenario_start" }), 50);
     } finally {
       if (mounted.current) setBusy(false);
     }
   };
 
-  // Shift+R triggers the same button (ignored while typing).
+  const toggleSimulation = async () => {
+    if (isActive) {
+      setSimActive(false);
+      try {
+        await liveApi.resetEnvironment();
+        requestSync();
+      } catch {
+        dispatch({ type: "reset" });
+      }
+    } else {
+      await run();
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== "r") return;
@@ -132,98 +134,112 @@ export function LiveAttackControls() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const selectedThreat = useMemo(
-    () => catalog?.threats.find((x) => x.scenarioKey === threat || x.id === threat),
-    [catalog, threat],
-  );
-  const hint = VARIANTS.find((v) => v.value === variant)?.hint;
   return (
     <form
-      className="space-y-3"
+      className="flex w-full flex-wrap items-center gap-2.5"
       onSubmit={(e) => {
         e.preventDefault();
         void run();
       }}
     >
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="block w-32">
-          <span className="text-xs font-medium text-muted">Source</span>
-          <select value={source} onChange={(e) => setSource(e.target.value)} className={`${field} font-mono`}>
-            {sources.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
-        </label>
-        <label className="block w-28">
-          <span className="text-xs font-medium text-muted">Target</span>
-          <select value={target} onChange={(e) => setTarget(e.target.value)} className={`${field} font-mono`}>
-            {targets.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
-        </label>
-        <label className="block w-72">
-          <span className="text-xs font-medium text-muted">Threat Catalog (30 Scenarios)</span>
-          <select
-            value={threat}
-            onChange={(e) => {
-              const val = e.target.value;
-              setThreat(val);
-              const t = catalog?.threats.find((x) => x.scenarioKey === val || x.id === val);
-              if (t) setPrompt(t.prompt);
-            }}
-            className={`${field} font-mono`}
-          >
-            <option value="">Custom NLP prompt</option>
-            {groupedThreats.map(([family, items]) => (
-              <optgroup key={family} label={family}>
-                {items.map((t) => (
-                  <option key={t.scenarioKey} value={t.scenarioKey}>
-                    {t.scenarioKey} · {t.threatClassification}
-                  </option>
-                ))}
-              </optgroup>
+      <select
+        aria-label="Source node"
+        value={source}
+        onChange={(e) => setSource(e.target.value)}
+        className={`${field} w-28 font-mono`}
+      >
+        {sources.map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
+
+      <select
+        aria-label="Target node"
+        value={target}
+        onChange={(e) => setTarget(e.target.value)}
+        className={`${field} w-24 font-mono`}
+      >
+        {targets.map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
+
+      <select
+        aria-label="Threat scenario"
+        value={threat}
+        onChange={(e) => {
+          const val = e.target.value;
+          setThreat(val);
+          const t = catalog?.threats.find((x) => x.scenarioKey === val || x.id === val);
+          if (t) setPrompt(t.prompt);
+        }}
+        className={`${field} w-56 font-mono`}
+      >
+        <option value="">Custom prompt</option>
+        {groupedThreats.map(([family, items]) => (
+          <optgroup key={family} label={family}>
+            {items.map((t) => (
+              <option key={t.scenarioKey} value={t.scenarioKey}>
+                {t.scenarioKey} · {t.threatClassification}
+              </option>
             ))}
-          </select>
-        </label>
-        <label className="block min-w-[240px] flex-1">
-          <span className="text-xs font-medium text-muted">NLP Attack Prompt / Payload</span>
-          <input
-            value={prompt}
-            onChange={(e) => {
-              setPrompt(e.target.value);
-              setThreat("");
-            }}
-            maxLength={MAX_PROMPT + 50}
-            autoComplete="off"
-            aria-invalid={!!problem && prompt.length > 0}
-            aria-describedby="nlp-attack-hint"
-            placeholder="Launch a massive syn flood to exhaust connection tables"
-            className={field}
-          />
-        </label>
-      </div>
-      {selectedThreat && (
-        <div className="rounded-md border border-border bg-elevated/60 px-3 py-2 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="accent">{selectedThreat.scenarioKey}</Badge>
-            <span className="font-semibold text-fg-strong">{selectedThreat.threatClassification}</span>
-            <span className="text-muted">· {selectedThreat.threatFamily}</span>
-            {selectedThreat.protocol && (
-              <span className="font-mono text-[11px] text-muted">
-                ({selectedThreat.protocol}{selectedThreat.targetPort ? `/${selectedThreat.targetPort}` : ""})
-              </span>
+          </optgroup>
+        ))}
+      </select>
+
+      <input
+        aria-label="Attack prompt"
+        value={prompt}
+        onChange={(e) => {
+          setPrompt(e.target.value);
+          setThreat("");
+        }}
+        maxLength={MAX_PROMPT + 50}
+        autoComplete="off"
+        placeholder="Attack prompt"
+        className={`${field} min-w-[180px] flex-1`}
+      />
+
+      <Segmented
+        label="Variant"
+        value={variant}
+        onChange={setVariant}
+        options={VARIANTS}
+        disabled={busy}
+      />
+
+      <div className="ml-auto flex items-center justify-end">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isActive}
+          disabled={busy}
+          onClick={() => void toggleSimulation()}
+          className="inline-flex items-center gap-2.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-100 transition-colors hover:border-zinc-500 disabled:opacity-50"
+        >
+          <span>Simulation</span>
+          <span
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
+              isActive ? "bg-green-600" : "bg-zinc-700",
             )}
-          </div>
-          {selectedThreat.description && <p className="mt-1 text-muted">{selectedThreat.description}</p>}
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-3">
-        <Segmented label="Force Variant" value={variant} onChange={setVariant} options={VARIANTS.map((v) => ({ value: v.value, label: v.label }))} disabled={busy} />
-        <Button type="submit" variant="primary" size="sm" disabled={!canRun} title="Shift + R">
-          <Play aria-hidden className="size-3.5" /> {busy ? "Launching…" : "Launch Threat"}
-        </Button>
-        {last?.alert_id && <Badge tone="accent">Injected: {last.alert_id} ({last.scenario_id})</Badge>}
+          >
+            <span
+              className={cn(
+                "inline-block size-3.5 transform rounded-full bg-white transition-transform",
+                isActive ? "translate-x-4" : "translate-x-1",
+              )}
+            />
+          </span>
+          <span className={cn("font-mono text-[11px]", isActive ? "text-green-400" : "text-zinc-400")}>
+            {busy ? "..." : isActive ? "ON" : "OFF"}
+          </span>
+        </button>
       </div>
-      <p id="nlp-attack-hint" aria-live="polite" className={`text-xs ${problem && prompt.length > 0 ? "text-danger" : "text-muted"}`}>
-        {problem ?? hint} <span className="text-subtle">{catalogNote}</span>
-      </p>
     </form>
   );
 }

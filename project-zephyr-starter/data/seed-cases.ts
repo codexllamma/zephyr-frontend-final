@@ -7,13 +7,10 @@ import {
 } from "@/data/builders";
 import { REVIEWER } from "@/data/devices";
 import { correctionFeedback, criticPassed, runCritic } from "@/lib/critic";
-import { fakeUuid, isoFromMs, shortId } from "@/lib/format";
+import { fakeUuid, isoFromMs } from "@/lib/format";
 import type {
   ActionType,
   AlertCase,
-  EventActor,
-  EventKind,
-  EventSeverity,
   ExecutionResult,
   GRPORewardBreakdown,
   LifecycleStage,
@@ -21,7 +18,6 @@ import type {
   NIDSAlert,
   ProposalAttempt,
   ReviewState,
-  ZephyrEvent,
 } from "@/types";
 
 /**
@@ -74,19 +70,6 @@ interface SeedSpec extends Omit<AlertSpec, "ts"> {
   total?: number;
 }
 
-function ev(
-  alertId: string,
-  n: number,
-  ts: string,
-  kind: EventKind,
-  actor: EventActor,
-  severity: EventSeverity,
-  message: string,
-  deviceId?: NIDSAlert["target_node"],
-): ZephyrEvent {
-  return { id: `${shortId(alertId)}-e${n}`, ts, kind, actor, severity, message, alertId, deviceId };
-}
-
 function buildSeedCase(spec: SeedSpec): AlertCase {
   const ts = `${DAY}T${spec.at}Z`;
   const built = buildAlert({ ...spec, ts });
@@ -98,31 +81,18 @@ function buildSeedCase(spec: SeedSpec): AlertCase {
     reward: spec.total ? rewardOf(spec.total) : undefined,
   });
   const attempts: ProposalAttempt[] = [];
-  const timeline: ZephyrEvent[] = [];
-  let n = 1;
   let t = ts;
-
-  timeline.push(ev(id, n++, t, "alert", "nids", spec.threat === "BENIGN" ? "info" : "warning", `NIDS alert detected: ${alert.nids_llm_assessment.attack_signature}`, alert.target_node));
 
   if (spec.firstAttempt) {
     t = addSec(ts, 3);
     const bad = makeAttempt(1, alert, buildBadEnvelope(alert, spec.threat, spec.firstAttempt), t);
     attempts.push(bad);
-    timeline.push(ev(id, n++, t, "proposal", "model", "info", `Model proposal created (attempt 1): ${bad.envelope.chosen_mitigation.action_type}`));
-    t = addSec(ts, 4);
-    timeline.push(ev(id, n++, t, "validation", "critic", "critical", `Critic rejected attempt 1: ${bad.checks.filter((c) => c.status === "failed").length} check(s) failed`));
     t = addSec(ts, 7);
     const fixed = makeAttempt(2, alert, good, t);
     attempts.push(fixed);
-    timeline.push(ev(id, n++, t, "proposal", "model", "info", `Model proposal created (attempt 2): ${good.chosen_mitigation.action_type}`));
-    t = addSec(ts, 8);
-    timeline.push(ev(id, n++, t, "validation", "critic", "success", "Critic validation passed (attempt 2)"));
   } else {
     t = addSec(ts, 3);
     attempts.push(makeAttempt(1, alert, good, t));
-    timeline.push(ev(id, n++, t, "proposal", "model", "info", `Model proposal created: ${good.chosen_mitigation.action_type}`));
-    t = addSec(ts, 4);
-    timeline.push(ev(id, n++, t, "validation", "critic", "success", "Critic validation passed"));
   }
 
   const decidedAt = addSec(ts, spec.decideAfter ?? 55);
@@ -135,18 +105,13 @@ function buildSeedCase(spec: SeedSpec): AlertCase {
     case "executed":
     case "failed": {
       review = { status: "approved", reviewer: REVIEWER, note: spec.note, decidedAt };
-      timeline.push(ev(id, n++, decidedAt, "review", "reviewer", "success", `${REVIEWER} approved the proposal`));
-      timeline.push(ev(id, n++, addSec(decidedAt, 1), "record", "system", "info", "Decision saved; chosen/rejected pair recorded for GRPO training"));
-      timeline.push(ev(id, n++, addSec(decidedAt, 3), "validation", "critic", "success", "Final Critic re-validation passed"));
       const doneAt = addSec(decidedAt, 6);
       if (spec.outcome === "executed") {
         stage = "executed";
         execution = { status: "confirmed", simulated: true, appliedCommand: cmd, finishedAt: doneAt, message: `Rule applied in ${alert.target_node} namespace (simulated).` };
-        timeline.push(ev(id, n++, doneAt, "execution", "executor", "success", `Execution confirmed (simulated): rule applied in ${alert.target_node}`, alert.target_node));
       } else {
         stage = "failed";
         execution = { status: "failed", simulated: true, appliedCommand: cmd, finishedAt: doneAt, message: "docker exec returned a non-zero exit code: the container did not respond (simulated failure)." };
-        timeline.push(ev(id, n++, doneAt, "execution", "executor", "critical", `Execution failed (simulated): ${alert.target_node} did not respond to docker exec`, alert.target_node));
       }
       break;
     }
@@ -154,31 +119,22 @@ function buildSeedCase(spec: SeedSpec): AlertCase {
       stage = "executed";
       review = { status: "approved", reviewer: REVIEWER, note: spec.note, decidedAt };
       execution = { status: "not_applicable", simulated: true, finishedAt: addSec(decidedAt, 4), message: "NO_OP approved: monitoring continues, no firewall change applied." };
-      timeline.push(ev(id, n++, decidedAt, "review", "reviewer", "success", `${REVIEWER} approved NO_OP`));
-      timeline.push(ev(id, n++, addSec(decidedAt, 1), "record", "system", "info", "Decision saved; chosen/rejected pair recorded for GRPO training"));
-      timeline.push(ev(id, n++, addSec(decidedAt, 4), "execution", "executor", "info", "No firewall change applied (NO_OP)"));
       break;
     case "benign":
       stage = "marked_benign";
       review = { status: "marked_benign", reviewer: REVIEWER, note: spec.note, decidedAt };
       execution = { status: "not_applicable", simulated: true, message: "Marked benign: no action applied." };
-      timeline.push(ev(id, n++, decidedAt, "review", "reviewer", "success", `${REVIEWER} marked the traffic as benign`));
-      timeline.push(ev(id, n++, addSec(decidedAt, 1), "record", "system", "info", "Decision saved; chosen/rejected pair recorded for GRPO training"));
       break;
     case "revision":
       stage = "revision_requested";
       review = { status: "revision_requested", reviewer: REVIEWER, note: spec.note, decidedAt };
       execution = { status: "not_started", simulated: true };
-      timeline.push(ev(id, n++, decidedAt, "review", "reviewer", "warning", `${REVIEWER} requested a revision`));
-      timeline.push(ev(id, n++, addSec(decidedAt, 1), "record", "system", "info", "Decision saved; pair excluded from training until a revised proposal is approved"));
       break;
     case "rejected":
     default:
       stage = "rejected";
       review = { status: "rejected", reviewer: REVIEWER, note: spec.note, decidedAt };
       execution = { status: "not_applicable", simulated: true, message: "Proposal rejected by reviewer: no action applied." };
-      timeline.push(ev(id, n++, decidedAt, "review", "reviewer", "warning", `${REVIEWER} rejected the proposal`));
-      timeline.push(ev(id, n++, addSec(decidedAt, 1), "record", "system", "info", "Decision saved; pair excluded from training (reviewer rejected the proposal)"));
       break;
   }
 
@@ -192,7 +148,6 @@ function buildSeedCase(spec: SeedSpec): AlertCase {
     stage,
     review,
     execution,
-    timeline,
     provenance: "demo",
     isLive: false,
   };

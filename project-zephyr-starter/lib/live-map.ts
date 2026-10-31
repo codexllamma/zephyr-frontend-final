@@ -1,6 +1,6 @@
 import { notEvaluatedChecks } from "@/lib/critic";
 import { THREAT_DESCRIPTIONS, explainIptablesCommand } from "@/lib/explain";
-import { actionLabel, fmtInt, threatLabel } from "@/lib/format";
+import { fmtInt, threatLabel } from "@/lib/format";
 import { MODEL_VERSION } from "@/data/devices";
 import { DEVICE_IDS, EXT_NODE_IDS } from "@/types";
 import type {
@@ -241,30 +241,6 @@ export function pendingToCase(item: BackendPendingItem, net: Partial<Record<Node
     stage: "awaiting_review",
     review: { status: "pending" },
     execution: { status: "not_started", simulated: false },
-    timeline: [
-      {
-        id: `ev-${id}-detected`,
-        ts: timestamp,
-        kind: "alert",
-        actor: "nids",
-        severity: severity === "LOW" ? "info" : severity === "CRITICAL" ? "critical" : "warning",
-        message: `Backend alert ${id}: ${threatLabel(threat)} (${modelName} proposed ${actionLabel(chosen.action_type)})`,
-        alertId: id,
-      },
-      ...(cbTriggered
-        ? [
-            {
-              id: `ev-${id}-cb`,
-              ts: timestamp,
-              kind: "validation" as const,
-              actor: "critic" as const,
-              severity: "critical" as const,
-              message: item.circuit_breaker_banner ?? "Circuit breaker triggered: fallback rule engaged",
-              alertId: id,
-            },
-          ]
-        : []),
-    ],
     provenance: "backend",
     isLive: true,
     backendMeta: meta,

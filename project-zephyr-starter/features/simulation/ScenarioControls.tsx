@@ -1,79 +1,74 @@
 "use client";
 
 import { useEffect } from "react";
-import { Pause, Play, RotateCcw } from "lucide-react";
 import { useDemo } from "@/components/providers/DemoProvider";
-import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
 import { CAMERA_OVERVIEW_EVENT } from "@/hooks/useScrollCamera";
 import { SCENARIOS, SCENARIO_ORDER } from "@/data/scenarios";
-
-function scrollToActivity() {
-  const tl = document.getElementById("event-timeline");
-  const term = document.getElementById("sim-terminal");
-  if (!tl && !term) return;
-  const top = Math.min(...[tl, term].filter((x): x is HTMLElement => !!x).map((x) => x.getBoundingClientRect().top)) + window.scrollY;
-  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  window.scrollTo({ top: Math.max(0, top - 72), behavior: smooth ? "smooth" : "auto" });
-}
-
-const RUN_BADGE = { idle: "Idle", running: "Running", paused: "Paused", completed: "Completed" } as const;
+import { cn } from "@/lib/cn";
 
 export function ScenarioControls() {
   const { state, dispatch } = useDemo();
   const sc = state.scenario;
-  const def = SCENARIOS[sc.selected];
-  const done = sc.completed.includes(sc.selected) && sc.run !== "running" && sc.run !== "paused";
-  const runLabel = sc.run === "paused" ? "Resume" : done ? "Completed" : "Run Scenario";
-  const canRun = sc.run !== "running" && !done;
+  const isRunning = sc.run === "running";
 
-  /** Run: pull the graph camera back to the full view, then scroll down to the timeline and terminal. */
-  const run = () => {
-    dispatch({ type: "scenario_start" });
-    window.dispatchEvent(new Event(CAMERA_OVERVIEW_EVENT));
-    window.setTimeout(scrollToActivity, 900);
+  const toggleSimulation = () => {
+    if (isRunning) {
+      dispatch({ type: "scenario_pause" });
+    } else {
+      dispatch({ type: "scenario_start" });
+      window.dispatchEvent(new Event(CAMERA_OVERVIEW_EVENT));
+    }
   };
 
-  // Shift+R triggers the same Run button (ignored while typing).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== "r") return;
       const t = e.target;
       if (t instanceof HTMLElement && (t.isContentEditable || t.closest("[data-terminal]") || ["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName))) return;
-      if (!canRun) return;
       e.preventDefault();
-      run();
+      toggleSimulation();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Segmented
-          label="Scenario"
-          value={sc.selected}
-          disabled={sc.run === "running"}
-          onChange={(id) => dispatch({ type: "select_scenario", id })}
-          options={SCENARIO_ORDER.map((id) => ({ value: id, label: SCENARIOS[id].label }))}
-        />
-        <div className="flex items-center gap-1.5">
-          <Button variant="primary" size="sm" onClick={run} disabled={!canRun} title="Shift + R">
-            <Play aria-hidden className="size-3.5" /> {runLabel}
-          </Button>
-          <Button size="sm" onClick={() => dispatch({ type: "scenario_pause" })} disabled={sc.run !== "running"}>
-            <Pause aria-hidden className="size-3.5" /> Pause
-          </Button>
-          <Button size="sm" onClick={() => dispatch({ type: "reset" })} aria-label="Reset demo">
-            <RotateCcw aria-hidden className="size-3.5" /> Reset Demo
-          </Button>
-        </div>
-        <Badge tone={sc.run === "running" ? "accent" : sc.run === "completed" ? "success" : "neutral"}>
-          {RUN_BADGE[sc.run]}
-          {sc.run !== "idle" && ` · step ${Math.min(sc.stepIndex, def.steps.length)}/${def.steps.length}`}
-        </Badge>
+    <div className="flex w-full flex-wrap items-center gap-3">
+      <Segmented
+        label="Scenario"
+        value={sc.selected}
+        disabled={isRunning}
+        onChange={(id) => dispatch({ type: "select_scenario", id })}
+        options={SCENARIO_ORDER.map((id) => ({ value: id, label: SCENARIOS[id].label }))}
+      />
+
+      <div className="ml-auto flex items-center justify-end gap-3">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isRunning}
+          onClick={toggleSimulation}
+          className="inline-flex items-center gap-2.5 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-100 transition-colors hover:border-zinc-500"
+        >
+          <span>Simulation</span>
+          <span
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
+              isRunning ? "bg-green-600" : "bg-zinc-700",
+            )}
+          >
+            <span
+              className={cn(
+                "inline-block size-3.5 transform rounded-full bg-white transition-transform",
+                isRunning ? "translate-x-4" : "translate-x-1",
+              )}
+            />
+          </span>
+          <span className={cn("font-mono text-[11px]", isRunning ? "text-green-400" : "text-zinc-400")}>
+            {isRunning ? "ON" : "OFF"}
+          </span>
+        </button>
       </div>
     </div>
   );

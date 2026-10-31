@@ -35,15 +35,41 @@ const ACTION_TIMEOUT_MS = 60_000;
  * Direct backend fetch to http://localhost:8000 without custom ngrok headers or env abstractions.
  */
 export async function apiFetch<T>(path: string, init: RequestInit = {}, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) {
+    const err = new DOMException("Request cancelled", "AbortError");
+    throw err;
+  }
+
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body !== undefined) headers.set("Content-Type", "application/json");
 
   const ctrl = new AbortController();
   const limit = (init.method ?? "GET").toUpperCase() === "GET" ? READ_TIMEOUT_MS : ACTION_TIMEOUT_MS;
-  const timer = setTimeout(() => ctrl.abort(), limit);
-  const onAbort = () => ctrl.abort();
-  signal?.addEventListener("abort", onAbort);
+  const timer = setTimeout(() => {
+    try {
+      ctrl.abort(new DOMException(`Backend did not answer within ${limit / 1000} s`, "TimeoutError"));
+    } catch {
+      try {
+        ctrl.abort();
+      } catch {}
+    }
+  }, limit);
+
+  const onAbort = () => {
+    try {
+      ctrl.abort(signal?.reason ?? new DOMException("Request cancelled", "AbortError"));
+    } catch {
+      try {
+        ctrl.abort();
+      } catch {}
+    }
+  };
+
+  if (signal) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
   try {
     const res = await fetch(`${API_URL}${path}`, { ...init, headers, signal: ctrl.signal, cache: "no-store" });
     const text = await res.text();
@@ -59,13 +85,29 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}, signal?:
       throw new ApiError(msg, res.status);
     }
     return body as T;
-  } catch (e) {
+  } catch (e: unknown) {
     if (e instanceof ApiError) throw e;
-    if (e instanceof DOMException && e.name === "AbortError") throw new ApiError(signal?.aborted ? "Request cancelled" : `Backend did not answer within ${limit / 1000} s`);
-    throw new ApiError("Cannot reach http://localhost:8000 (check if FastAPI server is running)");
+
+    const isAbort =
+      signal?.aborted ||
+      ctrl.signal.aborted ||
+      (e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError")) ||
+      (typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "AbortError");
+
+    if (isAbort) {
+      if (signal?.aborted) {
+        throw new DOMException("Request cancelled", "AbortError");
+      }
+      throw new ApiError(`Backend did not answer within ${limit / 1000} s`, 408);
+    }
+
+    const message = e instanceof Error ? e.message : String(e);
+    throw new ApiError(`Cannot reach ${API_URL}: ${message}`);
   } finally {
     clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
+    if (signal) {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 }
 

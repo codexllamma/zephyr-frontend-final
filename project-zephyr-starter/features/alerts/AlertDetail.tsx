@@ -2,7 +2,6 @@
 
 import { useDemo } from "@/components/providers/DemoProvider";
 import { Badge } from "@/components/ui/Badge";
-import { EventTimeline } from "@/components/ui/EventTimeline";
 import { Field, Panel } from "@/components/ui/Panel";
 import { Term } from "@/components/ui/Tooltip";
 import { fmtBytes, fmtDateTime, fmtInt, shortId } from "@/lib/format";
@@ -96,10 +95,6 @@ export function AlertDetail({ c }: { c: AlertCase }) {
 
       <Panel title="Explain the decision">
         <ExplainPanel c={c} />
-      </Panel>
-
-      <Panel title="Alert timeline">
-        {c.timeline.length ? <EventTimeline events={c.timeline} /> : <p className="text-xs text-muted">No events recorded for this alert yet.</p>}
       </Panel>
     </div>
   );

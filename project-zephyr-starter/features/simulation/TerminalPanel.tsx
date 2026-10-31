@@ -1,75 +1,36 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Fragment, type ReactNode } from "react";
-import { ChevronDown, ChevronUp, Eraser, SquareTerminal } from "lucide-react";
-import { Badge } from "@/components/ui/Badge";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Eraser } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { DeviceId, EventSeverity, TerminalLine, TerminalLineKind } from "@/types";
+import type { DeviceId, TerminalLine } from "@/types";
 
-const KIND: Record<TerminalLineKind, string> = {
-  command: "text-terminal-fg font-medium",
-  output: "text-terminal-fg",
-  error: "text-term-red",
-  system: "text-term-yellow",
-  log: "text-terminal-fg",
-};
+function renderOutcomeLine(l: TerminalLine): ReactNode {
+  const raw = l.text.trim();
+  const isDrop = l.tag === "DROP" || l.tone === "critical" || /\b(DROP|REJECT|BLOCK)\b/i.test(raw);
+  const isAccept = !isDrop && (l.tag === "ACCEPT" || l.tone === "success" || /\b(ACCEPT|200|OK)\b/i.test(raw));
+  const cleanText = raw.replace(/^\[(DROP|ACCEPT|ALERT|SUCCESS|WARN|INFO|CMD|LOG)\]\s*/i, "");
 
-/** Tailwind text color class for log lines by tag (CMD = cyan, ALERT = red, SUCCESS = green, WARN = amber). */
-function logLevelClass(tag: string | undefined, tone: EventSeverity | undefined): string {
-  switch ((tag ?? "").toUpperCase()) {
-    case "CMD":
-      return "text-cyan-400";
-    case "ALERT":
-      return "text-red-400";
-    case "SUCCESS":
-      return "text-emerald-400";
-    case "WARN":
-      return "text-amber-400";
-    case "RAW":
-      return "text-terminal-fg";
-    default:
-      return tone === "critical"
-        ? "text-red-400"
-        : tone === "warning"
-          ? "text-amber-400"
-          : tone === "success"
-            ? "text-emerald-400"
-            : "text-terminal-fg";
-  }
-}
-
-/** ANSI-style highlighting for command output (IPs, states, simulated markers). */
-const TOKEN = /(\[(?:simulated|illustrative)[^\]]*\]|\b\d{1,3}(?:\.\d{1,3}){3}(?:\/\d+)?|\b(?:ACCEPT|UP|Up|LOWER_UP)\b|\b(?:DROP|REJECT|DOWN)\b|\b(?:eth0|lo|br-zephyr)\b|dpt:\d+|\b(?:pc-\d|ext-net|traffic-gen)\b)/g;
-function tokenClass(t: string): string {
-  if (t.startsWith("[")) return "text-term-yellow";
-  if (/^\d/.test(t)) return "text-term-cyan";
-  if (/^(ACCEPT|UP|Up|LOWER_UP)$/.test(t)) return "text-term-green";
-  if (/^(DROP|REJECT|DOWN)$/.test(t)) return "text-term-red";
-  return "text-term-magenta";
-}
-function colorize(text: string): ReactNode {
-  return text.split(TOKEN).map((part, i) =>
-    i % 2 === 1 ? (
-      <span key={i} className={tokenClass(part)}>{part}</span>
-    ) : (
-      <Fragment key={i}>{part}</Fragment>
-    ),
+  return (
+    <div key={l.id} className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-zinc-300">
+      {l.time && <span className="mr-2 text-zinc-500">{l.time}</span>}
+      {isDrop ? (
+        <span className="font-semibold text-red-500">[DROP]</span>
+      ) : isAccept ? (
+        <span className="font-semibold text-green-500">[ACCEPT]</span>
+      ) : (
+        <span className="font-semibold text-zinc-400">[{l.tag ?? "PKT"}]</span>
+      )}{" "}
+      <span>{cleanText}</span>
+    </div>
   );
 }
 
-/**
- * Presentational terminal. It only renders lines and reports submitted input;
- * it never interprets or executes anything. The parent decides what a command
- * means (see lib/terminal.ts and lib/services).
- */
 export function TerminalPanel({
   deviceId,
   lines,
   onSubmit,
   onClear,
-  collapsed,
-  onToggle,
   live,
   actions,
 }: {
@@ -77,24 +38,35 @@ export function TerminalPanel({
   lines: TerminalLine[];
   onSubmit: (input: string) => void;
   onClear: () => void;
-  collapsed: boolean;
-  onToggle: () => void;
-  /** Live backend log stream: input is disabled and the badge says LIVE. */
+  collapsed?: boolean;
+  onToggle?: () => void;
   live?: boolean;
-  /** Extra header buttons (live mode). */
   actions?: ReactNode;
 }) {
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const bottomAnchorRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const visibleLines = lines.filter((l) => {
+    if (l.kind === "system") return false;
+    if (l.kind === "log") {
+      return (
+        l.tag === "DROP" ||
+        l.tag === "ACCEPT" ||
+        l.tone === "critical" ||
+        l.tone === "success" ||
+        /\b(DROP|ACCEPT|REJECT|BLOCK|200)\b/i.test(l.text)
+      );
+    }
+    return true;
+  });
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [lines, collapsed]);
+  }, [visibleLines.length]);
 
   const submit = () => {
     const input = value.trim();
@@ -131,57 +103,67 @@ export function TerminalPanel({
   };
 
   return (
-    <section id="sim-terminal" data-terminal aria-label={`Terminal for ${deviceId}`} className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-terminal-bg">
-      <header className="flex min-h-10 shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-border bg-surface px-3 py-1">
-        <h2 className="flex items-center gap-2 text-[13px] font-semibold text-fg-strong">
-          <SquareTerminal aria-hidden className="size-4 text-muted" />
-          Terminal
-          <span className="font-mono text-xs font-normal text-muted">{deviceId}</span>
-        </h2>
-        <div className="flex flex-wrap items-center gap-1.5">
+    <section
+      id="sim-terminal"
+      data-terminal
+      aria-label={`Terminal for ${deviceId}`}
+      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-zinc-800 bg-zinc-950 font-mono shadow-none"
+    >
+      <header className="flex h-9 shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-3">
+        <span className="font-mono text-xs text-zinc-400">
+          tty · {deviceId}
+        </span>
+        <div className="flex items-center gap-1.5">
           {actions}
-          {live ? (
-            <Badge tone="success" title="Streaming the backend log (GET /api/v1/terminal/logs).">LIVE</Badge>
-          ) : (
-            <Badge tone="warning" title="Commands are looked up in a predefined table. Nothing runs in a real container.">SIMULATED</Badge>
-          )}
-          <button type="button" onClick={onClear} aria-label="Clear terminal" title="Clear terminal" className="grid h-7 w-7 place-items-center rounded text-muted hover:bg-hover hover:text-fg">
+          <button
+            type="button"
+            onClick={onClear}
+            aria-label="Clear terminal"
+            title="Clear terminal"
+            className="grid h-6 w-6 place-items-center rounded text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+          >
             <Eraser aria-hidden className="size-3.5" />
-          </button>
-          <button type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "Expand terminal" : "Collapse terminal"} className="grid h-7 w-7 place-items-center rounded text-muted hover:bg-hover hover:text-fg">
-            {collapsed ? <ChevronUp aria-hidden className="size-4" /> : <ChevronDown aria-hidden className="size-4" />}
           </button>
         </div>
       </header>
-      {!collapsed && (
+      <div
+        className="flex h-full min-h-0 flex-1 flex-col font-mono text-xs"
+        onClick={() => {
+          if (!window.getSelection()?.toString()) inputRef.current?.focus();
+        }}
+      >
         <div
-          className="flex h-64 min-h-0 flex-col font-mono text-xs"
-          onClick={() => {
-            if (!window.getSelection()?.toString()) inputRef.current?.focus();
-          }}
+          ref={scrollRef}
+          role="log"
+          aria-live="polite"
+          aria-label="Terminal output"
+          className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
         >
-          <div ref={scrollRef} role="log" aria-live="polite" aria-label="Terminal output" className="min-h-0 flex-1 overflow-auto px-3 py-2">
-            {lines.map((l) => (
-              <div key={l.id} className={cn("whitespace-pre-wrap break-words leading-5", KIND[l.kind])}>
-                {l.kind === "command" ? (
-                  <>
-                    <Prompt deviceId={deviceId} /> {l.text}
-                  </>
-                ) : l.kind === "log" ? (
-                  <>
-                    <span className="text-term-dim">{l.time}</span>{" "}
-                    <span className={cn("font-semibold", logLevelClass(l.tag, l.tone))}>[{l.tag}]</span>{" "}
-                    <span className={logLevelClass(l.tag, l.tone)}>{l.text}</span>
-                  </>
-                ) : (
-                  colorize(l.text)
-                )}
+          {visibleLines.map((l) =>
+            l.kind === "command" ? (
+              <div key={l.id} className="whitespace-pre-wrap break-words leading-5 text-zinc-200">
+                <Prompt deviceId={deviceId} /> {l.text}
               </div>
-            ))}
-            <div ref={bottomAnchorRef} />
-          </div>
-          <label className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
-            <span className="shrink-0"><Prompt deviceId={deviceId} /></span>
+            ) : l.kind === "output" || l.kind === "error" ? (
+              <div
+                key={l.id}
+                className={cn(
+                  "whitespace-pre-wrap break-words leading-5",
+                  l.kind === "error" ? "text-red-500" : "text-zinc-300",
+                )}
+              >
+                {l.text}
+              </div>
+            ) : (
+              renderOutcomeLine(l)
+            ),
+          )}
+        </div>
+        {!live && (
+          <label className="flex shrink-0 items-center gap-2 border-t border-zinc-800 bg-zinc-950 px-3 py-1.5">
+            <span className="shrink-0">
+              <Prompt deviceId={deviceId} />
+            </span>
             <input
               ref={inputRef}
               value={value}
@@ -191,25 +173,16 @@ export function TerminalPanel({
               autoComplete="off"
               autoCapitalize="off"
               aria-label={`Command input for ${deviceId}`}
-              disabled={live}
-              placeholder={live ? "live backend log: use the buttons above" : "type help"}
-              className="min-w-0 flex-1 bg-transparent text-terminal-fg placeholder:text-term-dim focus:outline-none"
+              placeholder="command"
+              className="min-w-0 flex-1 bg-transparent font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
             />
           </label>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }
 
-/** Coloured prompt: user@host in green, path in blue, like a real shell. */
 function Prompt({ deviceId }: { deviceId: DeviceId }) {
-  return (
-    <span>
-      <span className="font-semibold text-term-green">root@{deviceId}</span>
-      <span className="text-terminal-fg">:</span>
-      <span className="font-semibold text-term-blue">/</span>
-      <span className="text-terminal-fg">#</span>
-    </span>
-  );
+  return <span className="text-zinc-400">root@{deviceId}:~#</span>;
 }

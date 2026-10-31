@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Background,
   Handle,
@@ -12,7 +12,6 @@ import {
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
-import { CameraHud } from "@/components/ui/CameraHud";
 import { LOCKED_CAMERA_PROPS, useScrollCamera } from "@/hooks/useScrollCamera";
 import type { Bounds, CameraStop } from "@/lib/camera";
 import { Activity, Cloud, Database, FolderLock, Globe, Monitor, Network, Terminal, type LucideIcon } from "lucide-react";
@@ -36,18 +35,37 @@ interface DeviceNodeData extends Record<string, unknown> {
 const hidden = { left: "50%", top: "50%", opacity: 0, pointerEvents: "none" as const };
 
 function DeviceNode({ data }: NodeProps<Node<DeviceNodeData>>) {
+  const [hovered, setHovered] = useState(false);
   const Icon = ICONS[data.id];
   const meta = DEVICE_STATUS_META[data.status];
   const ring =
-    data.status === "healthy" || data.status === "unknown" ? "border-border" : data.status === "under_review" || data.status === "blocked" ? "border-warning" : data.status === "mitigated" ? "border-success" : "border-danger";
+    data.status === "healthy" || data.status === "unknown"
+      ? "border-border"
+      : data.status === "under_review" || data.status === "blocked"
+        ? "border-warning"
+        : data.status === "mitigated"
+          ? "border-success"
+          : "border-danger";
+
   return (
     <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className={cn(
-        "w-[150px] rounded-lg border bg-surface px-3 py-2.5 text-left shadow-sm",
+        "group relative w-[150px] rounded-md border bg-surface px-3 py-2.5 text-left",
         ring,
         data.selected && "outline outline-2 outline-offset-2 outline-[var(--accent)]",
       )}
     >
+      <div
+        role="tooltip"
+        className={cn(
+          "pointer-events-none absolute -top-8 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded border border-zinc-700 bg-zinc-950 px-2 py-0.5 font-mono text-xs text-zinc-100",
+          hovered ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        )}
+      >
+        {data.ip}
+      </div>
       <Handle type="target" position={Position.Top} style={hidden} isConnectable={false} />
       <Handle type="source" position={Position.Top} style={hidden} isConnectable={false} />
       <div className="flex items-center gap-2">
@@ -56,7 +74,7 @@ function DeviceNode({ data }: NodeProps<Node<DeviceNodeData>>) {
         </span>
         <div className="min-w-0">
           <p className="font-mono text-[13px] font-semibold text-fg-strong">{data.id}</p>
-          <p className="truncate text-[10px] text-subtle">{data.ip}</p>
+          <p className="truncate font-mono text-[10px] text-subtle">{data.ip}</p>
         </div>
       </div>
       <p className={cn("mt-2 flex items-center gap-1.5 text-[11px] font-medium", meta.text)}>
@@ -67,21 +85,18 @@ function DeviceNode({ data }: NodeProps<Node<DeviceNodeData>>) {
 }
 
 function BridgeNode() {
-  const { state } = useDemo();
   return (
-    <div className="w-[130px] rounded-full border border-accent bg-surface px-3 py-2.5 text-center [background-image:linear-gradient(var(--accent-soft),var(--accent-soft))]">
+    <div className="w-[130px] rounded-full border border-accent bg-surface px-3 py-2.5 text-center">
       <Handle type="target" position={Position.Top} style={hidden} isConnectable={false} />
       <Handle type="source" position={Position.Top} style={hidden} isConnectable={false} />
       <Network aria-hidden className="mx-auto size-4 text-accent" />
       <p className="font-mono text-[12px] font-semibold text-fg-strong">br-zephyr</p>
-      <p className="text-[10px] text-muted">{state.mode === "live" ? "bridge" : "bridge · demo"}</p>
     </div>
   );
 }
 
 const nodeTypes: NodeTypes = { device: DeviceNode, bridge: BridgeNode };
 
-// Hub-and-spoke layout around the bridge (centre).
 const CX = 300;
 const CY = 190;
 const POS: Record<NodeId, { x: number; y: number }> = {
@@ -113,9 +128,10 @@ function spokeStyle(pattern: TrafficPattern | null): { className: string; dash?:
 
 function buildGraph(flows: NetworkFlow[], statuses: Record<DeviceId, { status: DeviceStatus; ip?: string; role?: string }>, selected: DeviceId, ext: Record<ExtNodeId, DeviceRuntime> | null) {
   type Item = { id: NodeId; ip: string; role: string; status: DeviceStatus };
+  const FALLBACK_EXT_IPS: Record<ExtNodeId, string> = { "ext-net": "172.28.0.100", "traffic-gen": "172.28.0.101" };
   const items: Item[] = [
     ...DEVICES.map<Item>((d) => ({ id: d.id, ip: statuses[d.id].ip ?? d.ip, role: statuses[d.id].role ?? d.role, status: statuses[d.id].status })),
-    ...(ext ? EXT_NODE_IDS.map<Item>((id) => ({ id, ip: ext[id].ip ?? "not reported", role: ext[id].role ?? EXT_ROLE[id], status: ext[id].status })) : []),
+    ...(ext ? EXT_NODE_IDS.map<Item>((id) => ({ id, ip: ext[id].ip ?? FALLBACK_EXT_IPS[id], role: ext[id].role ?? EXT_ROLE[id], status: ext[id].status })) : []),
   ];
   const nodes: Node[] = [
     { id: "bridge", type: "bridge", position: { x: CX - 65, y: CY - 30 }, data: {}, draggable: false, selectable: false, focusable: false },
@@ -153,11 +169,6 @@ const NODE_HALF_W = 75;
 const NODE_HALF_H = 40;
 const centerOf = (id: NodeId) => ({ x: POS[id].x + NODE_HALF_W, y: POS[id].y + NODE_HALF_H });
 
-/**
- * Pre-calculated flight path: overview (implicit, t=0) -> attacker (0.3)
- * -> victim (0.6) -> core gateway `br-zephyr` (1.0). Attacker and victim
- * follow the newest live alert; before any alert they default to pc-5 -> pc-3.
- */
 function buildStops(attacker: NodeId, victim: DeviceId): CameraStop[] {
   return [
     { t: 0.3, ...centerOf(attacker), zoom: 1.3, label: `Attacker · ${attacker}` },
@@ -177,10 +188,15 @@ function Canvas() {
   const victim = live?.alert.target_node ?? "pc-3";
   const stops = useMemo(() => buildStops(attacker, victim), [attacker, victim]);
   const ref = useRef<HTMLDivElement>(null);
-  const { onInit, hud } = useScrollCamera({ containerRef: ref, stops, bounds: BOUNDS, listenForOverview: true });
+  const { onInit } = useScrollCamera({ containerRef: ref, stops, bounds: BOUNDS, listenForOverview: true });
 
   return (
-    <div ref={ref} className="relative h-[340px] sm:h-[430px] w-full overflow-hidden rounded-lg border border-border bg-bg canvas-grid" role="group" aria-label={`Network topology: ${state.mode === "live" ? "7 nodes" : "5 containers"} connected to bridge br-zephyr. The camera tours the nodes automatically; click to pause or resume, scroll to steer.`}>
+    <div
+      ref={ref}
+      className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden rounded-md border border-zinc-800 bg-bg canvas-grid"
+      role="group"
+      aria-label="Network topology"
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -195,12 +211,6 @@ function Canvas() {
       >
         <Background gap={22} size={1} />
       </ReactFlow>
-      <CameraHud progress={hud.progress} label={hud.label} playing={hud.playing} />
-      <ul className="pointer-events-none absolute bottom-2 right-2 hidden gap-3 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[10px] text-muted sm:flex">
-        <li className="flex items-center gap-1.5"><span className="h-0.5 w-4 bg-accent" />routine</li>
-        <li className="flex items-center gap-1.5"><span className="h-0.5 w-4 bg-warning" />high volume</li>
-        <li className="flex items-center gap-1.5"><span className="h-0.5 w-4 bg-danger" />suspicious / blocked</li>
-      </ul>
     </div>
   );
 }

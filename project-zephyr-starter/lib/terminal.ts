@@ -3,18 +3,8 @@ import { parseIptables } from "@/lib/critic";
 import { fakeUuid } from "@/lib/format";
 import type { DeviceId, TerminalLineKind } from "@/types";
 
-/**
- * SAFE SIMULATED TERMINAL ENGINE.
- *
- * This is a lookup table of predefined commands with deterministic responses.
- * It never executes user input, never touches a shell, and never talks to
- * Docker. Anything outside the predefined list answers "command not found".
- */
-
 export interface TerminalContext {
-  /** Rules applied by (simulated) executions inside this device's namespace. */
   appliedRules: { alertId: string; command: string }[];
-  /** Current simulated-clock time (ISO-8601). */
   nowIso: string;
 }
 
@@ -43,7 +33,6 @@ export const SUPPORTED_COMMANDS = [
 ] as const;
 
 const out = (text: string): TerminalOutputLine => ({ kind: "output", text });
-const sys = (text: string): TerminalOutputLine => ({ kind: "system", text });
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -55,9 +44,9 @@ function fmtDate(iso: string): string {
 }
 
 export function terminalBanner(deviceId: DeviceId): TerminalOutputLine[] {
+  const device = DEVICE_BY_ID[deviceId];
   return [
-    sys(`[simulated] Safe demo terminal for ${deviceId}. Commands are predefined; nothing runs in a real container.`),
-    sys("Type `help` to see what is available."),
+    { kind: "log", text: `[ACCEPT] 172.28.0.101 -> ${device.ip}:80 PROTO=TCP` },
   ];
 }
 
@@ -87,19 +76,7 @@ export function runSimulatedCommand(deviceId: DeviceId, raw: string, ctx: Termin
     case "help":
       return {
         lines: [
-          out(`Simulated terminal for ${deviceId} — predefined commands only:`),
-          out("  help                   show this list"),
-          out("  clear                  clear the screen"),
-          out("  whoami                 current user"),
-          out("  hostname               container name"),
-          out("  pwd                    working directory"),
-          out("  ls                     list the root directory"),
-          out("  ip addr                interface addresses"),
-          out("  ip route               routing table"),
-          out("  iptables -L INPUT -n   INPUT rules, incl. simulated Zephyr actions"),
-          out("  docker ps              illustrative host-level container list"),
-          out("  date                   simulated demo clock"),
-          sys("Nothing here executes in a real container."),
+          out("help | clear | whoami | hostname | pwd | ls | ip addr | ip route | iptables -L INPUT -n | docker ps | date"),
         ],
       };
     case "whoami":
@@ -117,12 +94,11 @@ export function runSimulatedCommand(deviceId: DeviceId, raw: string, ctx: Termin
       const mac = `02:42:ac:1c:00:${last.toString(16).padStart(2, "0")}`;
       return {
         lines: [
-          out("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN"),
+          out("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 state UNKNOWN"),
           out("    inet 127.0.0.1/8 scope host lo"),
-          out("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP"),
+          out("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 state UP"),
           out(`    link/ether ${mac} brd ff:ff:ff:ff:ff:ff`),
           out(`    inet ${device.ip}/16 brd 172.28.255.255 scope global eth0`),
-          sys("[simulated] illustrative demo address"),
         ],
       };
     }
@@ -143,33 +119,24 @@ export function runSimulatedCommand(deviceId: DeviceId, raw: string, ctx: Termin
           out("Chain INPUT (policy ACCEPT)"),
           out("target     prot opt source               destination"),
           ...rules.map(out),
-          sys(
-            rules.length
-              ? "[simulated] rules above were applied by Zephyr actions executed in this demo"
-              : "[simulated] no Zephyr actions have been executed on this container in this demo",
-          ),
         ],
       };
     }
     case "docker ps":
       return {
         lines: [
-          sys("[illustrative host-level output — this demo has no Docker access]"),
-          out("CONTAINER ID   IMAGE              STATUS                  NAMES"),
+          out("CONTAINER ID   IMAGE              STATUS       NAMES"),
           ...DEVICES.map((d) =>
-            out(`${fakeUuid(`container-${d.id}`).replace(/-/g, "").slice(0, 12)}   zephyr/node:demo   Up 3 hours (simulated)   ${d.name}`),
+            out(`${fakeUuid(`container-${d.id}`).replace(/-/g, "").slice(0, 12)}   zephyr/node:demo   Up 3 hours   ${d.name}`),
           ),
         ],
       };
     case "date":
-      return { lines: [out(fmtDate(ctx.nowIso)), sys("[simulated] demo clock")] };
+      return { lines: [out(fmtDate(ctx.nowIso))] };
     default: {
       const name = input.split(" ")[0];
       return {
-        lines: [
-          { kind: "error", text: `bash: ${name}: command not found` },
-          sys("Simulated terminal: only predefined commands are available. Type `help`."),
-        ],
+        lines: [{ kind: "error", text: `bash: ${name}: command not found` }],
       };
     }
   }
