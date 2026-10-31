@@ -1,18 +1,32 @@
 import type { DeviceId, NodeId, Protocol } from "@/types";
 
 /**
- * 14-Second LLM Inference Sequence (updates every 3 seconds across 5 steps).
+ * Multi-Step LLM Inference Sequences.
+ * DEMO: 14-second artificial benchmark hold for technical judge inspection.
+ * LIVE: ~5.2-second realistic remote inference over Kaggle Cloudflare Tunnel.
  */
-export const LLM_THINKING_DURATION_MS = 14_000;
-export const LLM_THINKING_STEP_MS = 3_000;
+export const DEMO_THINKING_DURATION_MS = 14_000;
+export const LIVE_THINKING_DURATION_MS = 5_200;
+export const LLM_THINKING_DURATION_MS = DEMO_THINKING_DURATION_MS;
+export const LLM_THINKING_STEP_MS = 2_800;
 
-export const LLM_THINKING_STEPS = [
-  "[SYS] Intercepting Anomalous Payload...",
-  "[SYS] Extracting PCAP Signatures...",
-  "[AI] LLM Inference Engine analyzing behavior...",
-  "[AI] Evaluating Mitigation Envelopes...",
-  "[SYS] Synthesizing Netfilter Rules...",
+export const DEMO_THINKING_STEPS = [
+  "[DEMO 14s MOCK] Intercepting Anomalous Ingress Payload from catalog...",
+  "[DEMO 14s MOCK] Matching Golden Scenario in precomputed dataset...",
+  "[DEMO 14s MOCK] Simulating 14s LLM reasoning latency hold for judge audit...",
+  "[DEMO 14s MOCK] Evaluating deterministic mitigation candidate...",
+  "[DEMO 14s MOCK] Golden Playbook Rule ready for Human-in-the-Loop review.",
 ] as const;
+
+export const LIVE_THINKING_STEPS = [
+  "[LIVE KAGGLE LLM] Packaging raw network vectors into JSON telemetry...",
+  "[LIVE KAGGLE LLM] Establishing HTTPS session with Kaggle Cloudflare Tunnel...",
+  "[LIVE KAGGLE LLM] Dispatching prompt to zephyr-dpo-v3 GPU cluster...",
+  "[LIVE SAFETY GATE] Streaming raw LLM tokens through local Circuit Breaker...",
+  "[LIVE SAFETY GATE] Grammar & Blast-Radius verified · Ready for HITL review.",
+] as const;
+
+export const LLM_THINKING_STEPS = DEMO_THINKING_STEPS;
 
 export const MITIGATION_ENFORCED_BANNER =
   "============= MITIGATION RULE ENFORCED =============";

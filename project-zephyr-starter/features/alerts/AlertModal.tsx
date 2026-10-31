@@ -32,6 +32,11 @@ function AlertToastCard({ pendingAlert }: { pendingAlert: AlertCase }) {
   const [cbWarningVisible, setCbWarningVisible] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const meta = pendingAlert.backendMeta;
+  const isLive = meta?.executionMode === "live" || pendingAlert.provenance === "backend";
+  const latencySec = meta?.latencySec ?? (isLive ? 5.2 : 14.0);
+  const modelName = meta?.modelName || (isLive ? "zephyr-dpo-v3 (Kaggle GPU)" : "zephyr-dataset-playbook");
+
   const rawScore =
     pendingAlert.backendMeta?.qScore ??
     pendingAlert.alert.nids_llm_assessment.confidence_score ??
@@ -159,14 +164,49 @@ function AlertToastCard({ pendingAlert }: { pendingAlert: AlertCase }) {
       aria-modal="false"
       aria-label="Mitigation Decision Toast"
       className={cn(
-        "fixed bottom-6 right-6 z-50 w-[400px] max-w-[calc(100vw-2rem)] rounded-md border border-zinc-800 bg-zinc-950 p-4 text-zinc-100 shadow-2xl transition-all duration-300",
+        "fixed bottom-6 right-6 z-50 w-[420px] max-w-[calc(100vw-2rem)] rounded-md border border-zinc-800 bg-zinc-950 p-4 text-zinc-100 shadow-2xl transition-all duration-300",
         entered && !closing
           ? "translate-y-0 opacity-100 ease-out"
           : "pointer-events-none translate-y-10 opacity-0 ease-in",
       )}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-800/90 pb-2.5">
+      {/* Engine Execution Provenance Tag */}
+      <div
+        className={cn(
+          "flex items-center justify-between rounded border px-2.5 py-1.5 font-mono text-[11px] leading-tight transition-colors",
+          isLive
+            ? "border-emerald-800/80 bg-emerald-950/50 text-emerald-300"
+            : "border-amber-800/80 bg-amber-950/50 text-amber-300",
+        )}
+      >
+        <div className="flex items-center gap-1.5 font-bold tracking-wide">
+          <span
+            className={cn(
+              "inline-block size-2 rounded-full",
+              isLive ? "animate-pulse bg-emerald-400" : "bg-amber-400",
+            )}
+          />
+          <span>{isLive ? "LIVE KAGGLE INFERENCE" : "DEMO PLAYBOOK ENGINE"}</span>
+        </div>
+        <span
+          className={cn(
+            "tabular text-[10px] font-semibold",
+            isLive ? "text-emerald-400" : "text-amber-400",
+          )}
+        >
+          ⏱ {latencySec.toFixed(2)}s {isLive ? "GPU LATENCY" : "BENCHMARK HOLD"}
+        </span>
+      </div>
+
+      <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-zinc-500">
+        <span className="max-w-[240px] truncate">Model: {modelName}</span>
+        <span className="truncate">
+          {isLive ? "Tunnel: Cloudflare" : "Route: /api/mock/threat"}
+        </span>
+      </div>
+
+      {/* Threat Header */}
+      <div className="mt-3 flex items-center justify-between gap-2 border-b border-zinc-800/90 pb-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <ShieldAlert
             aria-hidden

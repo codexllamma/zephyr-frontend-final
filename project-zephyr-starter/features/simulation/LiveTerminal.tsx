@@ -146,6 +146,19 @@ export function LiveTerminal() {
     if (!isAttackStreaming) return;
     let tick = 0;
 
+    const isLive = state.mode === "live";
+    const headerLine: TerminalLine = {
+      id: `dispatch-hdr-${attackEpoch}`,
+      kind: "log" as const,
+      text: isLive
+        ? `>>> [LIVE MODE] DISPATCHED TO KAGGLE LLM TUNNEL (zephyr-dpo-v3) >>>`
+        : `>>> [DEMO MODE] SIMULATING 14.0s REASONING LATENCY (LOCAL PLAYBOOK) >>>`,
+      time: formatNowTime(),
+      tag: isLive ? "LIVE DISPATCH" : "DEMO MOCK",
+      tone: isLive ? ("success" as const) : ("info" as const),
+    };
+    setStreamLines((prev) => [...prev, headerLine].slice(-MAX_LINES));
+
     const pushRedLine = () => {
       const id = `atk-${attackEpoch}-${seqRef.current++}`;
       const lineText = nextAttackFeedLine(feedCtxRef.current, tick++);

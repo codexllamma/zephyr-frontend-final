@@ -48,6 +48,9 @@ export interface BackendPendingItem {
   rejected_alternative?: BackendRejectedAlternative;
   rejection_reason?: string;
   postmortem_card?: PostmortemCard;
+  execution_mode?: "demo" | "live";
+  latency_sec?: number;
+  inference_source?: string;
 }
 
 export interface BackendNetworkNode {

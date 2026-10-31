@@ -9,7 +9,7 @@ import { CAMERA_OVERVIEW_EVENT } from "@/hooks/useScrollCamera";
 import { FALLBACK_SOURCES, FALLBACK_TARGETS, normalizeCatalog } from "@/lib/catalog";
 import { cn } from "@/lib/cn";
 import { liveApi } from "@/lib/services/live";
-import { LLM_THINKING_DURATION_MS } from "@/lib/terminal-feeds";
+import { DEMO_THINKING_DURATION_MS, LIVE_THINKING_DURATION_MS } from "@/lib/terminal-feeds";
 import type { DeviceId, NodeId, Protocol } from "@/types";
 import type { BackendPendingItem, Catalog, CatalogThreat, VariantMode } from "@/types/backend";
 
@@ -45,15 +45,41 @@ export function LiveAttackControls() {
   const [catalog, setCatalog] = useState<Catalog>(() => normalizeCatalog({}));
   const [busy, setBusy] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState<number>(0);
 
   const mounted = useRef(true);
   const fallbackTimerRef = useRef<number | null>(null);
+  const stopwatchTimerRef = useRef<number | null>(null);
 
   const isLiveMode = state.mode === "live";
   const isThinking = state.drama.phase === "thinking";
   const trimmed = prompt.trim();
   const problem = !trimmed || trimmed.length > MAX_PROMPT || source === target;
   const canRun = !busy && !isThinking && !problem;
+
+  // Real-time elapsed stopwatch counter during the thinking window
+  useEffect(() => {
+    if (!isThinking) {
+      setElapsedSec(0);
+      if (stopwatchTimerRef.current !== null) {
+        window.clearInterval(stopwatchTimerRef.current);
+        stopwatchTimerRef.current = null;
+      }
+      return;
+    }
+
+    const t0 = Date.now();
+    stopwatchTimerRef.current = window.setInterval(() => {
+      setElapsedSec(parseFloat(((Date.now() - t0) / 1000).toFixed(1)));
+    }, 100);
+
+    return () => {
+      if (stopwatchTimerRef.current !== null) {
+        window.clearInterval(stopwatchTimerRef.current);
+        stopwatchTimerRef.current = null;
+      }
+    };
+  }, [isThinking]);
 
   // Load 30-category catalog from backend if available, fallback gracefully
   useEffect(() => {
@@ -125,7 +151,7 @@ export function LiveAttackControls() {
     setBusy(true);
     const startedAt = Date.now();
 
-    // Clear stale unreviewed cases so the current launch takes focus
+    // Clear stale unreviewed cases so current launch takes focus
     for (const c of state.cases) {
       if (c.stage === "awaiting_review") {
         markResolved(c.id);
@@ -163,7 +189,7 @@ export function LiveAttackControls() {
     };
 
     try {
-      // 2. Dynamic routing based on global isLiveMode toggle:
+      // 2. Dynamic routing:
       //    DEMO -> /api/mock/threat (14s simulated latency in backend)
       //    LIVE -> /api/live/threat (Kaggle Cloudflare Tunnel + Circuit Breaker)
       const res = isLiveMode
@@ -188,12 +214,19 @@ export function LiveAttackControls() {
       requestSync();
       window.setTimeout(requestSync, 800);
     } catch {
-      // Standalone/offline rehearsal fallback: holds full 14s thinking sequence before prompting HITL
+      // Standalone/offline rehearsal fallback:
+      // DEMO: Holds exact 14.0s artificial delay for judge audit!
+      // LIVE: Holds ~5.2s realistic remote GPU inference time!
       const elapsed = Date.now() - startedAt;
-      const remaining = Math.max(50, LLM_THINKING_DURATION_MS - elapsed);
+      const targetDelay = isLiveMode
+        ? LIVE_THINKING_DURATION_MS
+        : DEMO_THINKING_DURATION_MS;
+      const remaining = Math.max(50, targetDelay - elapsed);
+
       fallbackTimerRef.current = window.setTimeout(() => {
         if (!mounted.current) return;
         const offlineVariant = variant === "RANDOM" ? (isLiveMode ? "A" : "B") : variant;
+        const measuredLatency = parseFloat(((Date.now() - startedAt) / 1000).toFixed(2));
         dispatch({
           type: "drama_offline_fallback",
           sourceNode: source,
@@ -203,6 +236,10 @@ export function LiveAttackControls() {
           targetPort,
           protocol,
           nowMs: Date.now(),
+          executionMode: isLiveMode ? "live" : "demo",
+          latencySec: isLiveMode ? measuredLatency : 14.0,
+          scenarioId: threat,
+          categoryId: catId,
         });
       }, remaining);
     } finally {
@@ -263,12 +300,12 @@ export function LiveAttackControls() {
               className={cn(
                 "flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50",
                 !isLiveMode
-                  ? "bg-zinc-800 text-zinc-100 shadow-xs"
+                  ? "bg-amber-950/80 text-amber-300 border border-amber-800/80 shadow-xs"
                   : "text-zinc-400 hover:text-zinc-200",
               )}
             >
-              <ShieldCheck className="size-3 text-zinc-400" />
-              <span>DEMO</span>
+              <ShieldCheck className="size-3 text-amber-400" />
+              <span>DEMO (14s)</span>
             </button>
             <button
               type="button"
@@ -282,23 +319,31 @@ export function LiveAttackControls() {
               )}
             >
               <Zap className="size-3 text-emerald-400" />
-              <span>LIVE</span>
+              <span>LIVE (KAGGLE)</span>
             </button>
           </div>
 
-          {/* Minimalist Route Indicator */}
-          <div className="hidden items-center gap-2 text-[11px] text-zinc-400 sm:flex">
+          {/* Minimalist Route Indicator & Real-Time Stopwatch */}
+          <div className="hidden items-center gap-2 text-[11px] font-mono sm:flex">
             <span
               className={cn(
                 "inline-block size-1.5 rounded-full",
-                isLiveMode ? "animate-pulse bg-emerald-500" : "bg-zinc-600",
+                isLiveMode ? "animate-pulse bg-emerald-500" : "bg-amber-500",
               )}
             />
-            <span>
-              {isLiveMode
-                ? "ROUTING: /api/live/threat · KAGGLE LLM TUNNEL"
-                : "ROUTING: /api/mock/threat · 14s SIMULATED LATENCY"}
-            </span>
+            {isThinking ? (
+              <span className={cn("tabular font-bold", isLiveMode ? "text-emerald-400" : "text-amber-400")}>
+                {isLiveMode
+                  ? `⏱ LIVE INFERENCE: ${elapsedSec.toFixed(1)}s (Streaming from Kaggle GPU...)`
+                  : `⏱ DEMO AUDIT HOLD: ${elapsedSec.toFixed(1)}s / 14.0s (Simulating reasoning...)`}
+              </span>
+            ) : (
+              <span className="text-zinc-400">
+                {isLiveMode
+                  ? "ROUTING: /api/live/threat · KAGGLE LLM TUNNEL (FAST GPU)"
+                  : "ROUTING: /api/mock/threat · 14.0s HARDCODED DEMO DELAY"}
+              </span>
+            )}
           </div>
         </div>
 
@@ -319,10 +364,23 @@ export function LiveAttackControls() {
             type="button"
             onClick={() => void runThreat()}
             disabled={!canRun}
-            className="inline-flex h-8 items-center gap-2 rounded-md border border-red-800 bg-red-700 px-4 text-xs font-bold uppercase tracking-wider text-white shadow-xs transition-colors hover:bg-red-600 active:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50"
+            className={cn(
+              "inline-flex h-8 items-center gap-2 rounded-md px-4 text-xs font-bold uppercase tracking-wider text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              isLiveMode
+                ? "border border-emerald-700 bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800"
+                : "border border-red-800 bg-red-700 hover:bg-red-600 active:bg-red-800",
+            )}
           >
             <Crosshair aria-hidden className="size-3.5" />
-            <span>{isThinking || busy ? "Threat Active..." : "Launch Threat"}</span>
+            <span>
+              {isThinking || busy
+                ? isLiveMode
+                  ? `Kaggle Thinking... (${elapsedSec.toFixed(1)}s)`
+                  : `Demo Thinking... (${elapsedSec.toFixed(1)}s)`
+                : isLiveMode
+                  ? "Launch Live Attack"
+                  : "Launch Demo Threat (14s)"}
+            </span>
           </button>
         </div>
       </div>

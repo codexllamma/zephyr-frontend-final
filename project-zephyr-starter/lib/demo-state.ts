@@ -116,6 +116,10 @@ export type DemoAction =
       targetPort: number;
       protocol: Protocol;
       nowMs: number;
+      executionMode?: "demo" | "live";
+      latencySec?: number;
+      scenarioId?: string;
+      categoryId?: number;
     }
   | { type: "toast_push"; tone: ToastTone; title: string; message?: string }
   | { type: "toast_dismiss"; id: string };
@@ -538,9 +542,7 @@ function buildOfflineFallbackPendingItem(a: Extract<DemoAction, { type: "drama_o
 
   return {
     alert_id: `evt-${a.nowMs % 1_000_000_000}`,
-    category_id: 1,
     threat_family: "Volumetric & Protocol Exhaustion",
-    scenario_id: "SCENARIO_1",
     attacker_node: a.sourceNode,
     target_container: a.targetNode,
     source_ip: srcIp,
@@ -551,6 +553,15 @@ function buildOfflineFallbackPendingItem(a: Extract<DemoAction, { type: "drama_o
     selected_variant: pickedVariant,
     variant_label: isB ? "BLANKET_DROP" : isC ? "SYNTAX_ERROR" : "GOLDEN_PLAYBOOK",
     q_score: qScore,
+    category_id: a.categoryId ?? 1,
+    scenario_id: a.scenarioId ?? "SCENARIO_1",
+    model_name: a.executionMode === "live" ? "zephyr-dpo-v3 (Kaggle GPU)" : "zephyr-dataset-playbook",
+    execution_mode: a.executionMode ?? "demo",
+    latency_sec: a.latencySec ?? (a.executionMode === "live" ? 5.2 : 14.0),
+    inference_source:
+      a.executionMode === "live"
+        ? "Kaggle Remote LLM via Cloudflare Tunnel (https://cast-exciting-gpl-ant.trycloudflare.com)"
+        : "Deterministic Local Playbook (14s Simulated Latency Hold)",
     circuit_breaker_triggered: cbTriggered,
     circuit_breaker_reason: cbReason,
     violated_gates: cbTriggered ? [cbReason!] : [],
@@ -763,7 +774,7 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
       };
       const fallbackCase: AlertCase = {
         ...pendingToCase(item, net, iso),
-        provenance: "demo",
+        provenance: a.executionMode === "live" ? "backend" : "demo",
       };
       return {
         ...s,

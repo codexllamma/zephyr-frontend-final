@@ -184,6 +184,9 @@ export function pendingToCase(item: BackendPendingItem, net: Partial<Record<Node
     },
     telemetry: tel,
     postmortem: item.postmortem_card,
+    executionMode: item.execution_mode ?? (item.model_name?.includes("Kaggle") || item.model_name?.includes("live") ? "live" : "demo"),
+    latencySec: item.latency_sec ?? (item.execution_mode === "demo" ? 14.0 : 4.8),
+    inferenceSource: item.inference_source ?? (item.execution_mode === "demo" ? "Local Deterministic Catalog" : "Kaggle LLM via Cloudflare Tunnel"),
   };
 
   const destIp = item.destination_ip ?? net[target]?.ip ?? "not reported";

@@ -330,6 +330,9 @@ export interface BackendMeta {
   };
   telemetry?: TelemetryVector;
   postmortem?: PostmortemCard;
+  executionMode?: "demo" | "live";
+  latencySec?: number;
+  inferenceSource?: string;
 }
 
 export interface AlertCase {
