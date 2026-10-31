@@ -31,10 +31,10 @@ export function SimulationView() {
               role="status"
               aria-live="polite"
               className={cn(
-                "flex shrink-0 items-center justify-between rounded-md border px-3 py-2 font-mono text-xs transition-colors",
+                "flex shrink-0 items-center justify-between rounded-lg border px-3 py-2 text-xs font-sans transition-colors",
                 isLive
-                  ? "border-emerald-800/80 bg-emerald-950/40 text-emerald-300"
-                  : "border-amber-800/80 bg-amber-950/40 text-amber-300",
+                  ? "border-emerald-800/60 bg-emerald-950/30 text-emerald-200"
+                  : "border-amber-800/60 bg-amber-950/30 text-amber-200",
               )}
             >
               <span className="flex items-center gap-2.5 truncate">
@@ -44,7 +44,7 @@ export function SimulationView() {
                     isLive ? "bg-emerald-400" : "bg-amber-400",
                   )}
                 />
-                <span className="truncate font-semibold">{thinkingText}</span>
+                <span className="truncate font-medium">{thinkingText}</span>
               </span>
               <span className="ml-3 shrink-0 tabular text-[11px] text-zinc-400">
                 STEP {state.drama.thinkingStep + 1}/{steps.length}

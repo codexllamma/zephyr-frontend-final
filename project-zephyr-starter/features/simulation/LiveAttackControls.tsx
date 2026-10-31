@@ -365,7 +365,7 @@ export function LiveAttackControls() {
             onClick={() => void runThreat()}
             disabled={!canRun}
             className={cn(
-              "inline-flex h-8 items-center gap-2 rounded-md px-4 text-xs font-bold uppercase tracking-wider text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              "inline-flex h-8 items-center gap-2 rounded-md px-4 text-xs font-semibold text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
               isLiveMode
                 ? "border border-emerald-700 bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800"
                 : "border border-red-800 bg-red-700 hover:bg-red-600 active:bg-red-800",
@@ -387,7 +387,7 @@ export function LiveAttackControls() {
 
       {/* Quick Strike Red Team Presets */}
       <div className="flex w-full flex-wrap items-center gap-1.5 border-t border-zinc-900/80 pt-1.5">
-        <span className="flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-wider text-red-400">
+        <span className="flex items-center gap-1.5 font-sans text-xs font-semibold text-zinc-400">
           <Crosshair className="size-3" />
           RED TEAM:
         </span>
@@ -396,7 +396,7 @@ export function LiveAttackControls() {
           disabled={isThinking}
           onClick={() => handleSelectThreat("SCENARIO_1")}
           className={cn(
-            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            "rounded-md border px-2.5 py-1 font-sans text-xs font-medium transition-colors",
             threat === "SCENARIO_1"
               ? "border-red-700 bg-red-950/70 font-bold text-red-200"
               : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200",
@@ -409,7 +409,7 @@ export function LiveAttackControls() {
           disabled={isThinking}
           onClick={() => handleSelectThreat("SCENARIO_4")}
           className={cn(
-            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            "rounded-md border px-2.5 py-1 font-sans text-xs font-medium transition-colors",
             threat === "SCENARIO_4"
               ? "border-red-700 bg-red-950/70 font-bold text-red-200"
               : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200",
@@ -422,7 +422,7 @@ export function LiveAttackControls() {
           disabled={isThinking}
           onClick={() => handleSelectThreat("SCENARIO_10")}
           className={cn(
-            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            "rounded-md border px-2.5 py-1 font-sans text-xs font-medium transition-colors",
             threat === "SCENARIO_10"
               ? "border-purple-700 bg-purple-950/70 font-bold text-purple-200"
               : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200",
@@ -435,7 +435,7 @@ export function LiveAttackControls() {
           disabled={isThinking}
           onClick={() => handleSelectThreat("SCENARIO_99")}
           className={cn(
-            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            "rounded-md border px-2.5 py-1 font-sans text-xs font-medium transition-colors",
             threat === "SCENARIO_99" || threat === "UNKNOWN_ANOMALY"
               ? "border-amber-600 bg-amber-950/90 font-bold text-amber-200"
               : "border-amber-800/80 bg-amber-950/40 text-amber-300 hover:border-amber-600 hover:bg-amber-950/70",

@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Loader2,
+  ShieldAlert,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import { useDemo } from "@/components/providers/DemoProvider";
 import { requestHealthCheck } from "@/features/simulation/SlaHeartbeat";
 import { markResolved, requestSync } from "@/hooks/useBackendSync";
@@ -10,7 +18,15 @@ import { liveApi } from "@/lib/services/live";
 import { currentAttempt } from "@/lib/selectors";
 import type { AlertCase } from "@/types";
 
-const TOTAL_SEGMENTS = 20;
+interface SafetyFactor {
+  id: string;
+  label: string;
+  category: string;
+  maxPoints: number;
+  earnedPoints: number;
+  passed: boolean;
+  desc: string;
+}
 
 export function AlertModal() {
   const { state } = useDemo();
@@ -28,97 +44,170 @@ function AlertToastCard({ pendingAlert }: { pendingAlert: AlertCase }) {
   const [entered, setEntered] = useState(false);
   const [closing, setClosing] = useState(false);
   const [busy, setBusy] = useState<"accept" | "reject" | null>(null);
-  const [displayPct, setDisplayPct] = useState(0);
-  const [cbWarningVisible, setCbWarningVisible] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [copiedRule, setCopiedRule] = useState(false);
+
+  // 6-Factor Sequential Evaluation Animation State
+  const [activeFactorIndex, setActiveFactorIndex] = useState(-1);
+  const [checkedFactors, setCheckedFactors] = useState<number[]>([]);
+  const [runningScore, setRunningScore] = useState(0);
+  const [evaluationComplete, setEvaluationComplete] = useState(false);
+  const [animatedProgress, setAnimatedProgress] = useState(0);
 
   const meta = pendingAlert.backendMeta;
   const isLive = meta?.executionMode === "live" || pendingAlert.provenance === "backend";
   const latencySec = meta?.latencySec ?? (isLive ? 5.2 : 14.0);
   const modelName = meta?.modelName || (isLive ? "zephyr-dpo-v3 (Kaggle GPU)" : "zephyr-dataset-playbook");
-
-  const rawScore =
-    meta?.compositeScore ??
-    meta?.qScore ??
-    pendingAlert.alert.nids_llm_assessment.confidence_score ??
-    0.95;
   const threshold = meta?.executionThreshold ?? 80;
-  const targetPct = Math.max(
-    1,
-    Math.min(100, Math.round(rawScore <= 1 ? rawScore * 100 : rawScore)),
-  );
-  const cbTriggered =
-    meta?.circuitBreaker?.triggered === true ||
-    (meta?.compositeScore !== undefined && meta.compositeScore < threshold);
-  const isHighConfidence = targetPct >= threshold && !cbTriggered && !meta?.isZeroDay;
 
+  // Extract or compute deterministic scores for each of the 6 factors
+  const factors: SafetyFactor[] = useMemo(() => {
+    const gs = meta?.gateScores;
+    const cb = meta?.circuitBreaker?.triggered;
+    const cbReason = meta?.circuitBreaker?.reason ?? "";
+
+    let syntax = gs?.syntax_validity ?? (cb && cbReason.includes("GRAMMAR") ? 0 : 20);
+    let blast = gs?.blast_radius_scope ?? (cb && (cbReason.includes("BLAST") || cbReason.includes("/16")) ? 0 : 25);
+    let target = gs?.target_coherence ?? 15;
+    let proto = gs?.protocol_port_alignment ?? 15;
+    let dir = gs?.directionality ?? 10;
+    let action = gs?.action_severity ?? (meta?.isZeroDay ? 0 : 15);
+
+    syntax = Math.max(0, Math.min(20, syntax));
+    blast = Math.max(0, Math.min(25, blast));
+    target = Math.max(0, Math.min(15, target));
+    proto = Math.max(0, Math.min(15, proto));
+    dir = Math.max(0, Math.min(10, dir));
+    action = Math.max(0, Math.min(15, action));
+
+    return [
+      {
+        id: "syntax_validity",
+        label: "Syntax Validity",
+        category: "Netfilter Regex",
+        maxPoints: 20,
+        earnedPoints: syntax,
+        passed: syntax === 20,
+        desc: syntax === 20 ? "Valid iptables syntax & arguments" : "Grammar check failed or unrecognized flags",
+      },
+      {
+        id: "blast_radius_scope",
+        label: "Blast Radius Scope",
+        category: "CIDR /32 Scope",
+        maxPoints: 25,
+        earnedPoints: blast,
+        passed: blast === 25,
+        desc: blast === 25 ? "Surgical /32 isolation preserves SLA traffic" : "Blanket /16 subnet drop halts benign nodes",
+      },
+      {
+        id: "target_coherence",
+        label: "Target Coherence",
+        category: "Entity Alignment",
+        maxPoints: 15,
+        earnedPoints: target,
+        passed: target === 15,
+        desc: target === 15 ? "Mitigation matches identified attacker IP" : "Attacker IP mismatch in candidate rule",
+      },
+      {
+        id: "protocol_port_alignment",
+        label: "Protocol Alignment",
+        category: "L4 Port Match",
+        maxPoints: 15,
+        earnedPoints: proto,
+        passed: proto === 15,
+        desc: proto === 15 ? "Aligned with target transport protocol & port" : "Mismatched destination port or protocol",
+      },
+      {
+        id: "directionality",
+        label: "Directionality Check",
+        category: "Netfilter Chain",
+        maxPoints: 10,
+        earnedPoints: dir,
+        passed: dir === 10,
+        desc: dir === 10 ? "Correct ingress chain placement (INPUT)" : "Incorrect chain selected for traffic flow",
+      },
+      {
+        id: "action_severity",
+        label: "Action Severity",
+        category: "Impact Severity",
+        maxPoints: 15,
+        earnedPoints: action,
+        passed: action === 15,
+        desc: action === 15 ? "Proportional netfilter drop / rate limiting" : "Unmeasured blanket drop on unmapped anomaly",
+      },
+    ];
+  }, [meta]);
+
+  const finalScore = useMemo(() => {
+    if (meta?.compositeScore !== undefined) {
+      return Math.max(1, Math.min(100, Math.round(meta.compositeScore)));
+    }
+    return factors.reduce((sum, f) => sum + f.earnedPoints, 0);
+  }, [meta, factors]);
+
+  const passesSafetyThreshold = finalScore >= threshold && !meta?.circuitBreaker?.triggered && !meta?.isZeroDay;
+
+  // Run sequential evaluation animation on mount or when pending alert changes
   useEffect(() => {
-    const enterRaf = window.requestAnimationFrame(() => {
-      setEntered(true);
+    setEntered(true);
+    setActiveFactorIndex(0);
+    setCheckedFactors([]);
+    setRunningScore(0);
+    setEvaluationComplete(false);
+    setAnimatedProgress(0);
+
+    const timeouts: number[] = [];
+    const STEP_DELAY = 280; // 280ms per factor
+    let currentScore = 0;
+
+    factors.forEach((f, index) => {
+      timeouts.push(
+        window.setTimeout(() => {
+          currentScore += f.earnedPoints;
+          setRunningScore(currentScore);
+          setCheckedFactors((prev) => [...prev, index]);
+          if (index < factors.length - 1) {
+            setActiveFactorIndex(index + 1);
+          }
+        }, (index + 1) * STEP_DELAY),
+      );
     });
 
-    const timers: number[] = [];
-
-    if (isHighConfidence) {
-      const steps = 14;
-      for (let i = 1; i <= steps; i++) {
-        timers.push(
-          window.setTimeout(() => {
-            setDisplayPct(Math.round((targetPct * i) / steps));
-          }, 80 + i * 38),
-        );
-      }
-    } else {
-      const peak = Math.min(72, targetPct + 14);
-      const dip = Math.max(12, targetPct - 11);
-      const jitter = Math.min(73, targetPct + 5);
-      const keyframes: [number, number][] = [
-        [110, Math.round(targetPct * 0.45)],
-        [240, peak],
-        [390, dip],
-        [540, jitter],
-        [690, Math.max(10, targetPct - 4)],
-        [830, targetPct],
-      ];
-      for (const [delay, val] of keyframes) {
-        timers.push(window.setTimeout(() => setDisplayPct(val), delay));
-      }
-      timers.push(
-        window.setTimeout(() => {
-          setCbWarningVisible(true);
-        }, 720),
-      );
-    }
+    // All factors completed
+    const finalDelay = (factors.length + 0.5) * STEP_DELAY;
+    timeouts.push(
+      window.setTimeout(() => {
+        setEvaluationComplete(true);
+        setActiveFactorIndex(-1);
+        setAnimatedProgress(finalScore);
+      }, finalDelay),
+    );
 
     return () => {
-      window.cancelAnimationFrame(enterRaf);
-      timers.forEach((id) => window.clearTimeout(id));
+      timeouts.forEach((id) => window.clearTimeout(id));
     };
-  }, [targetPct, isHighConfidence]);
+  }, [pendingAlert.id, factors, finalScore]);
 
   const attempt = currentAttempt(pendingAlert);
   const a = pendingAlert.alert;
   const exactRule =
     attempt?.envelope.chosen_mitigation.iptables_cmd ||
     `iptables -A INPUT -s ${a.source_ip} -p ${(a.protocol ?? "tcp").toLowerCase()} --dport ${a.dest_port} -j DROP`;
-
   const interceptedCmd = pendingAlert.backendMeta?.circuitBreaker?.interceptedCmd;
   const reasoning =
     attempt?.envelope.reasoning_trace ||
     pendingAlert.summary ||
-    `Anomalous ${a.nids_llm_assessment.attack_signature} traffic detected from ${a.source_ip} targeting ${a.target_node} (${a.target_ip}:${a.dest_port}). Surgical /32 netfilter drop isolates attacker while preserving benign SLA traffic.`;
+    `Anomalous ${a.nids_llm_assessment.attack_signature} traffic detected from ${a.source_ip} targeting ${a.target_node} (${a.target_ip}:${a.dest_port}). Surgical /32 netfilter rule isolates attacker while preserving internal SLA traffic.`;
 
-  const filledSegments = Math.round((displayPct / 100) * TOTAL_SEGMENTS);
-  const barToneClass = isHighConfidence
-    ? "bg-emerald-600"
-    : targetPct < 35
-      ? "bg-red-600"
-      : "bg-orange-600";
-  const pctTextClass = isHighConfidence
-    ? "text-emerald-400"
-    : targetPct < 35
-      ? "text-red-400"
-      : "text-orange-400";
+  const handleCopyRule = async () => {
+    try {
+      await navigator.clipboard.writeText(exactRule);
+      setCopiedRule(true);
+      setTimeout(() => setCopiedRule(false), 2000);
+    } catch {
+      // fallback
+    }
+  };
 
   const handleDecision = async (approved: boolean) => {
     if (busy || closing) return;
@@ -166,272 +255,337 @@ function AlertToastCard({ pendingAlert }: { pendingAlert: AlertCase }) {
     <aside
       role="dialog"
       aria-modal="false"
-      aria-label="Mitigation Decision Toast"
+      aria-label="Mitigation Decision Card"
       className={cn(
-        "fixed bottom-6 right-6 z-50 w-[430px] max-w-[calc(100vw-2rem)] rounded-md border bg-zinc-950 p-4 text-zinc-100 shadow-2xl transition-all duration-300",
-        meta?.isZeroDay ? "border-amber-600/90 shadow-[0_0_25px_rgba(217,119,6,0.25)]" : "border-zinc-800",
+        "fixed bottom-6 right-6 z-50 w-[470px] max-w-[calc(100vw-2rem)] max-h-[calc(100vh-3rem)] overflow-y-auto rounded-xl border border-zinc-800/90 bg-[#0e1117] p-4 text-zinc-100 shadow-2xl transition-all duration-300 font-sans",
         entered && !closing
           ? "translate-y-0 opacity-100 ease-out"
-          : "pointer-events-none translate-y-10 opacity-0 ease-in",
+          : "pointer-events-none translate-y-8 opacity-0 ease-in",
       )}
     >
-      {/* Engine Execution Provenance Tag */}
-      <div
-        className={cn(
-          "flex items-center justify-between rounded border px-2.5 py-1.5 font-mono text-[11px] leading-tight transition-colors",
-          isLive
-            ? "border-emerald-800/80 bg-emerald-950/50 text-emerald-300"
-            : "border-amber-800/80 bg-amber-950/50 text-amber-300",
-        )}
-      >
-        <div className="flex items-center gap-1.5 font-bold tracking-wide">
+      {/* 1. Header: Engine Provenance & Model */}
+      <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2.5">
+        <div className="flex items-center gap-2">
           <span
             className={cn(
               "inline-block size-2 rounded-full",
-              isLive ? "animate-pulse bg-emerald-400" : "bg-amber-400",
+              isLive ? "bg-emerald-400" : "bg-amber-400",
             )}
           />
-          <span>{isLive ? "LIVE KAGGLE INFERENCE" : "DEMO PLAYBOOK ENGINE"}</span>
-        </div>
-        <span
-          className={cn(
-            "tabular text-[10px] font-semibold",
-            isLive ? "text-emerald-400" : "text-amber-400",
-          )}
-        >
-          ⏱ {latencySec.toFixed(2)}s {isLive ? "GPU LATENCY" : "BENCHMARK HOLD"}
-        </span>
-      </div>
-
-      <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-zinc-500">
-        <span className="max-w-[240px] truncate">Model: {modelName}</span>
-        <span className="truncate">
-          {isLive ? "Tunnel: Cloudflare" : "Route: /api/mock/threat"}
-        </span>
-      </div>
-
-      {meta?.isZeroDay && (
-        <div className="mt-2 flex items-center gap-2 rounded border border-amber-600/80 bg-amber-950/70 px-2.5 py-1.5 font-mono text-[11px] font-bold tracking-wide text-amber-300">
-          <ShieldAlert aria-hidden className="size-4 shrink-0 text-amber-400" />
-          <span>FAIL-SAFE PROTOCOL: ZERO-DAY (OOD) DETECTED</span>
-        </div>
-      )}
-
-      {(meta?.macroFamily || meta?.explainableTrigger) && (
-        <div className="mt-2 flex items-center justify-between gap-1 rounded border border-zinc-800 bg-zinc-900/60 px-2.5 py-1 font-mono text-[10px]">
-          <span className="text-zinc-400">
-            Macro: <strong className="text-zinc-200">{meta?.macroFamily ?? "General"}</strong>
+          <span className="text-xs font-semibold tracking-wide text-zinc-200">
+            {isLive ? "Live Kaggle Inference" : "Demo Playbook Engine"}
           </span>
-          {meta?.explainableTrigger && (
-            <span className="truncate font-semibold text-amber-400">⚡ {meta.explainableTrigger}</span>
-          )}
+          <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-[10px] text-zinc-400 font-mono">
+            {latencySec.toFixed(2)}s
+          </span>
+        </div>
+        <span className="text-[10px] font-mono text-zinc-500 truncate max-w-[190px]">
+          {modelName}
+        </span>
+      </div>
+
+      {/* Zero-Day / Fail-Safe Notice if applicable */}
+      {meta?.isZeroDay && (
+        <div className="mt-2.5 flex items-center gap-2 rounded-lg border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+          <ShieldAlert className="size-4 shrink-0 text-amber-400" />
+          <div className="leading-tight">
+            <span className="font-semibold block">Fail-Safe Protocol Active</span>
+            <span className="text-[11px] text-amber-300/80">
+              Unmapped anomaly signature detected. Constrained to L4 rate-limiting fallback.
+            </span>
+          </div>
         </div>
       )}
 
-      {/* Threat Header */}
-      <div className="mt-3 flex items-center justify-between gap-2 border-b border-zinc-800/90 pb-2.5">
-        <div className="flex min-w-0 items-center gap-2">
+      {/* Threat Summary & Routing */}
+      <div className="mt-2.5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <ShieldAlert
-            aria-hidden
             className={cn(
               "size-4 shrink-0",
-              isHighConfidence ? "text-red-400" : "text-orange-400",
+              passesSafetyThreshold ? "text-emerald-400" : "text-amber-400",
             )}
           />
-          <span className="truncate font-mono text-xs font-semibold text-zinc-100">
+          <span className="truncate text-sm font-semibold text-zinc-100">
             {attempt?.envelope.threat_classification ?? a.nids_llm_assessment.attack_signature}
           </span>
         </div>
-        <span className="shrink-0 rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
-          {a.source_node} → {a.target_node}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {meta?.ttlDisplay && (
+            <span className="rounded-md border border-emerald-800/60 bg-emerald-950/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 font-mono">
+              TTL: {meta.ttlDisplay}
+            </span>
+          )}
+          <span className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-0.5 text-[10px] font-mono text-zinc-400">
+            {a.source_node} → {a.target_node}
+          </span>
+        </div>
       </div>
 
-      {/* Segmented AI Confidence Score Bar */}
-      <div className="mt-3 space-y-1.5">
-        <div className="flex items-center justify-between font-mono text-[11px]">
-          <div className="flex items-center gap-1.5">
-            <span className="uppercase tracking-wider text-zinc-400">AI Confidence Score</span>
-            {meta?.ttlDisplay && (
-              <span className="rounded border border-emerald-700/80 bg-emerald-950/80 px-1.5 py-0.5 font-mono text-[10px] font-bold text-emerald-300">
-                TTL: {meta.ttlDisplay}
-              </span>
-            )}
+      {/* 2. The 6-Factor Safety Scoring Matrix */}
+      <div className="mt-3.5 rounded-lg border border-zinc-800/80 bg-zinc-900/50 p-3">
+        <div className="flex items-center justify-between pb-2 border-b border-zinc-800/60">
+          <div>
+            <h4 className="text-xs font-semibold text-zinc-200">
+              Composite Confidence Calculation
+            </h4>
+            <p className="text-[10px] text-zinc-400">
+              Evaluating 6 Netfilter deterministic safety gates
+            </p>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-zinc-500">Threshold: {threshold}%</span>
-            <span className={cn("tabular font-bold", pctTextClass)}>{displayPct}%</span>
+          <div className="text-right">
+            <span className="text-[10px] text-zinc-400 block">Current Tally</span>
+            <span
+              className={cn(
+                "font-mono text-xs font-bold",
+                evaluationComplete
+                  ? passesSafetyThreshold
+                    ? "text-emerald-400"
+                    : "text-amber-400"
+                  : "text-zinc-200",
+              )}
+            >
+              {runningScore} / 100 pts
+            </span>
           </div>
         </div>
 
-        <div
-          role="progressbar"
-          aria-label="AI Confidence Score"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={displayPct}
-          className="flex h-2.5 w-full gap-1 rounded-xs border border-zinc-800 bg-zinc-900 p-0.5"
-        >
-          {Array.from({ length: TOTAL_SEGMENTS }).map((_, idx) => {
-            const active = idx < filledSegments;
+        {/* The 6 factors animated with checkmarks */}
+        <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+          {factors.map((f, idx) => {
+            const isChecked = checkedFactors.includes(idx);
+            const isCurrent = activeFactorIndex === idx;
+
             return (
-              <span
-                key={idx}
+              <div
+                key={f.id}
                 className={cn(
-                  "h-full flex-1 rounded-[1px] transition-colors duration-100",
-                  active ? barToneClass : "bg-zinc-800/70",
+                  "flex items-center justify-between rounded-lg border p-2 transition-all duration-300",
+                  isChecked
+                    ? f.passed
+                      ? "border-emerald-800/50 bg-emerald-950/25 text-zinc-200"
+                      : "border-rose-800/50 bg-rose-950/30 text-zinc-200"
+                    : isCurrent
+                      ? "border-zinc-700 bg-zinc-800/80 text-zinc-300 shadow-sm"
+                      : "border-zinc-800/40 bg-zinc-900/20 text-zinc-500",
                 )}
-              />
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  {isChecked ? (
+                    f.passed ? (
+                      <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-emerald-900/80 text-emerald-300">
+                        <Check className="size-2.5 stroke-[3]" />
+                      </span>
+                    ) : (
+                      <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-rose-900/80 text-rose-300">
+                        <X className="size-2.5 stroke-[3]" />
+                      </span>
+                    )
+                  ) : isCurrent ? (
+                    <span className="flex size-4 shrink-0 items-center justify-center">
+                      <Loader2 className="size-3 animate-spin text-zinc-400" />
+                    </span>
+                  ) : (
+                    <span className="size-4 shrink-0 rounded-full border border-zinc-700/60 bg-zinc-800/40" />
+                  )}
+                  <div className="truncate">
+                    <span className="text-[11px] font-medium leading-none block truncate">
+                      {f.label}
+                    </span>
+                    <span className="text-[9px] text-zinc-500 block truncate mt-0.5">
+                      {f.category}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="font-mono text-[10px] shrink-0 font-medium pl-1.5">
+                  {isChecked ? (
+                    f.passed ? (
+                      <span className="text-emerald-400 font-semibold">+{f.earnedPoints}</span>
+                    ) : (
+                      <span className="text-rose-400 font-semibold">0/{f.maxPoints}</span>
+                    )
+                  ) : (
+                    <span className="text-zinc-600">/{f.maxPoints}</span>
+                  )}
+                </div>
+              </div>
             );
           })}
         </div>
 
-        {meta?.gateScores && (
-          <div className="mt-1.5 grid grid-cols-3 gap-1 font-mono text-[9px]">
-            <div
+        {/* 3. The Benchmark Progress Bar (reveals smoothly when all 6 factors are checked) */}
+        <div className="mt-3.5 pt-2 border-t border-zinc-800/60">
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span className="text-[11px] font-medium text-zinc-300">
+              Confidence Score Bar
+            </span>
+            <span
               className={cn(
-                "rounded border px-1.5 py-0.5",
-                (meta.gateScores.syntax_validity ?? 20) < 20
-                  ? "border-red-800 bg-red-950/40 font-bold text-red-400"
-                  : "border-zinc-800 bg-zinc-900/60 text-zinc-400",
+                "font-mono text-xs font-bold",
+                evaluationComplete
+                  ? passesSafetyThreshold
+                    ? "text-emerald-400"
+                    : "text-amber-400"
+                  : "text-zinc-400",
               )}
             >
-              Syntax: {meta.gateScores.syntax_validity ?? 20}/20
+              {evaluationComplete ? `${finalScore}%` : `${runningScore}% (calculating)`}
+            </span>
+          </div>
+
+          {/* Progress bar with distinct 80% threshold benchmark line */}
+          <div className="relative pt-4 pb-1">
+            {/* The benchmark notch and label */}
+            <div
+              className="absolute top-0 -translate-x-1/2 flex flex-col items-center z-20 pointer-events-none"
+              style={{ left: "80%" }}
+            >
+              <span className="rounded bg-zinc-800 border border-zinc-700 px-1.5 py-0.2 text-[8px] font-semibold text-zinc-300 shadow-sm">
+                80% Benchmark
+              </span>
+              <div className="w-0.5 h-1.5 bg-zinc-300" />
             </div>
-            <div
-              className={cn(
-                "rounded border px-1.5 py-0.5",
-                (meta.gateScores.blast_radius_scope ?? 25) < 25
-                  ? "border-red-800 bg-red-950/40 font-bold text-red-400"
-                  : "border-zinc-800 bg-zinc-900/60 text-zinc-400",
-              )}
-            >
-              Blast: {meta.gateScores.blast_radius_scope ?? 25}/25
-            </div>
-            <div
-              className={cn(
-                "rounded border px-1.5 py-0.5",
-                (meta.gateScores.target_coherence ?? 15) < 15
-                  ? "border-red-800 bg-red-950/40 font-bold text-red-400"
-                  : "border-zinc-800 bg-zinc-900/60 text-zinc-400",
-              )}
-            >
-              Target: {meta.gateScores.target_coherence ?? 15}/15
-            </div>
-            <div
-              className={cn(
-                "rounded border px-1.5 py-0.5",
-                (meta.gateScores.protocol_port_alignment ?? 15) < 15
-                  ? "border-red-800 bg-red-950/40 font-bold text-red-400"
-                  : "border-zinc-800 bg-zinc-900/60 text-zinc-400",
-              )}
-            >
-              Proto: {meta.gateScores.protocol_port_alignment ?? 15}/15
-            </div>
-            <div
-              className={cn(
-                "rounded border px-1.5 py-0.5",
-                (meta.gateScores.directionality ?? 10) < 10
-                  ? "border-red-800 bg-red-950/40 font-bold text-red-400"
-                  : "border-zinc-800 bg-zinc-900/60 text-zinc-400",
-              )}
-            >
-              Dir: {meta.gateScores.directionality ?? 10}/10
-            </div>
-            <div
-              className={cn(
-                "rounded border px-1.5 py-0.5",
-                (meta.gateScores.action_severity ?? 15) < 15
-                  ? "border-red-800 bg-red-950/40 font-bold text-red-400"
-                  : "border-zinc-800 bg-zinc-900/60 text-zinc-400",
-              )}
-            >
-              Action: {meta.gateScores.action_severity ?? 15}/15
+
+            {/* The bar track */}
+            <div className="relative h-3 w-full rounded-full bg-zinc-800/90 border border-zinc-700/60 overflow-hidden">
+              {/* Vertical benchmark threshold line */}
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-zinc-200 z-10"
+                style={{ left: "80%" }}
+              />
+
+              {/* Animated fill track */}
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all duration-700 ease-out",
+                  passesSafetyThreshold ? "bg-emerald-500" : "bg-amber-500",
+                )}
+                style={{ width: `${evaluationComplete ? animatedProgress : runningScore}%` }}
+              />
             </div>
           </div>
-        )}
 
-        {(!isHighConfidence || cbTriggered) && cbWarningVisible && (
-          <div className="flex items-center gap-2 rounded border border-orange-800/80 bg-orange-950/50 px-2.5 py-1.5 font-mono text-[11px] font-bold tracking-wider text-orange-400">
-            <AlertTriangle aria-hidden className="size-3.5 shrink-0 text-orange-400" />
-            <span>CIRCUIT BREAKER ENGAGED · FALLBACK LOADED</span>
+          <div className="flex items-center justify-between text-[9px] text-zinc-500 mt-0.5 font-mono">
+            <span>0%</span>
+            <span className="text-zinc-400">80% Required Execution Threshold</span>
+            <span>100%</span>
           </div>
-        )}
+        </div>
 
-        {(cbTriggered || meta?.violationDelta) && (
-          <div className="mt-2 space-y-1 rounded border border-orange-800/80 bg-orange-950/40 p-2 font-mono text-[10px]">
-            <div className="break-all font-semibold leading-tight text-red-400">
-              <span className="mr-1 rounded border border-red-800 bg-red-950 px-1 py-0.5 text-[9px] font-bold text-red-300">
-                [REJECTED]
-              </span>
-              {meta?.violationDelta?.attempted ??
-                (interceptedCmd ? `AI attempted subnet drop: ${interceptedCmd}` : "AI rule failed safety threshold")}
-            </div>
-            <div className="break-all font-semibold leading-tight text-emerald-400">
-              <span className="mr-1 rounded border border-emerald-800 bg-emerald-950 px-1 py-0.5 text-[9px] font-bold text-emerald-300">
-                [ENFORCED]
-              </span>
-              {meta?.violationDelta?.enforced ?? `Playbook deployed surgical drop: ${exactRule}`}
-            </div>
+        {/* 4. Threshold Status Message */}
+        {evaluationComplete && (
+          <div className="mt-3 transition-opacity duration-300">
+            {!passesSafetyThreshold ? (
+              <div className="rounded-lg border border-amber-800/60 bg-amber-950/30 p-2.5 text-xs text-amber-200">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="size-4 shrink-0 text-amber-400 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block leading-tight">
+                      Score ({finalScore}%) is below 80% Safety Threshold
+                    </span>
+                    <p className="mt-1 text-[11px] text-amber-300/80 leading-relaxed">
+                      Circuit breaker engaged. Candidate rule failed blast radius / syntax gates.
+                      Switching to verified <strong>Golden Playbook fallback</strong>.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Explicit Delta Callout */}
+                <div className="mt-2 space-y-1.5 rounded-md border border-zinc-800 bg-zinc-950/80 p-2 text-[11px] font-mono">
+                  <div className="text-rose-400 break-all leading-tight">
+                    <span className="mr-1.5 rounded bg-rose-950 px-1.5 py-0.5 text-[9px] font-bold text-rose-300 border border-rose-800/60">
+                      REJECTED
+                    </span>
+                    {meta?.violationDelta?.attempted ??
+                      (interceptedCmd
+                        ? `AI attempted subnet drop: ${interceptedCmd}`
+                        : "AI rule failed safety threshold")}
+                  </div>
+                  <div className="text-emerald-400 break-all leading-tight">
+                    <span className="mr-1.5 rounded bg-emerald-950 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300 border border-emerald-800/60">
+                      ENFORCED
+                    </span>
+                    {meta?.violationDelta?.enforced ?? `Playbook deployed surgical drop: ${exactRule}`}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-emerald-800/60 bg-emerald-950/25 p-2.5 text-xs text-emerald-200">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="size-4 shrink-0 text-emerald-400" />
+                  <div>
+                    <span className="font-semibold block leading-tight">
+                      Confidence ({finalScore}%) satisfies Safety Threshold (≥ 80%)
+                    </span>
+                    <span className="text-[11px] text-emerald-300/80 block mt-0.5">
+                      All 6 Netfilter safety gates verified. Rule approved for autonomous enforcement.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* AI Reasoning */}
+      {/* 5. AI Reasoning & Indicators */}
       <div className="mt-3">
-        <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-          AI Reasoning
-        </p>
+        <span className="text-[10px] uppercase font-semibold tracking-wider text-zinc-500 block">
+          AI Reasoning & Vector Analysis
+        </span>
         {meta?.l7Indicator && (
-          <div className="mt-1 rounded border border-purple-800/70 bg-purple-950/40 px-2 py-1 font-mono text-[10px] text-purple-300">
-            <span className="font-bold text-purple-400">L7 Payload Artifact: </span>
+          <div className="mt-1.5 rounded-md border border-purple-800/60 bg-purple-950/30 px-2 py-1 text-[11px] font-mono text-purple-300">
+            <span className="font-semibold text-purple-400">Layer-7 Indicator: </span>
             <code>{meta.l7Indicator}</code>
           </div>
         )}
-        <p className="mt-1 max-h-24 overflow-y-auto text-xs leading-relaxed text-zinc-300">
-          AI Reasoning
-        </p>
-        <p className="mt-1 max-h-24 overflow-y-auto text-xs leading-relaxed text-zinc-300">
+        <p className="mt-1 max-h-20 overflow-y-auto text-xs leading-relaxed text-zinc-300 bg-zinc-900/40 rounded-lg p-2 border border-zinc-800/60">
           {reasoning}
         </p>
       </div>
 
-      {/* Netfilter Rule */}
+      {/* 6. Enforced Netfilter Rule Box */}
       <div className="mt-3">
-        <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-          Netfilter Rule
-        </p>
-        {cbTriggered && interceptedCmd && (
-          <code className="mt-1 block break-all rounded border border-orange-900/60 bg-zinc-900/60 px-2.5 py-1 font-mono text-[10px] text-orange-400/80 line-through">
-            {interceptedCmd}
-          </code>
-        )}
-        <code className="mt-1 block break-all rounded border border-zinc-800 bg-zinc-900 px-2.5 py-2 font-mono text-[11px] text-zinc-100">
+        <div className="flex items-center justify-between text-[10px] text-zinc-500 mb-1">
+          <span className="uppercase font-semibold tracking-wider">
+            Enforced Netfilter Rule
+          </span>
+          <button
+            type="button"
+            onClick={() => void handleCopyRule()}
+            className="flex items-center gap-1 text-[10px] text-zinc-400 hover:text-zinc-200"
+          >
+            {copiedRule ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+            {copiedRule ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <code className="block break-all rounded-lg border border-zinc-800 bg-zinc-900/90 px-3 py-2 font-mono text-[11px] text-zinc-200 selection:bg-emerald-900">
           {exactRule}
         </code>
       </div>
 
       {errorMsg && (
-        <p role="alert" className="mt-2 font-mono text-[11px] text-red-400">
+        <p role="alert" className="mt-2 text-xs text-rose-400 font-sans">
           {errorMsg}
         </p>
       )}
 
-      {/* Side-by-Side Accept / Reject */}
+      {/* 7. Action Buttons */}
       <div className="mt-4 grid grid-cols-2 gap-2.5">
         <button
           type="button"
           disabled={!!busy || closing}
           onClick={() => void handleDecision(true)}
-          className="rounded-md border border-emerald-800 bg-emerald-700 py-2 text-center text-xs font-bold tracking-wide text-zinc-100 transition-colors hover:bg-emerald-600 active:bg-emerald-800 disabled:opacity-50"
+          className="rounded-lg bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 py-2.5 text-center text-xs font-semibold tracking-wide text-white transition-colors shadow-sm disabled:opacity-50"
         >
-          {busy === "accept" ? "Enforcing..." : "Accept"}
+          {busy === "accept" ? "Enforcing..." : "Accept & Enforce"}
         </button>
         <button
           type="button"
           disabled={!!busy || closing}
           onClick={() => void handleDecision(false)}
-          className="rounded-md border border-zinc-700 bg-zinc-900 py-2 text-center text-xs font-bold tracking-wide text-zinc-300 transition-colors hover:border-red-800 hover:bg-red-950/60 hover:text-red-300 disabled:opacity-50"
+          className="rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 hover:text-zinc-100 active:bg-zinc-850 py-2.5 text-center text-xs font-semibold tracking-wide text-zinc-300 transition-colors disabled:opacity-50"
         >
           {busy === "reject" ? "Rejecting..." : "Reject"}
         </button>
