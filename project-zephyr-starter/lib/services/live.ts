@@ -185,6 +185,10 @@ export const liveApi = {
 
   /** Flushes container firewall rules, kills attack processes, resets backend state. */
   resetEnvironment: () => apiFetch<unknown>("/api/v1/terminal/reset", { method: "POST", body: JSON.stringify({}) }),
+
+  /** Tripartite audit ledger */
+  getLastAudit: () => apiFetch<Record<string, unknown>>("/api/v1/audit/last", { method: "GET" }),
+  getAuditLedger: () => apiFetch<Record<string, unknown>[]>("/api/v1/audit/ledger", { method: "GET" }),
 };
 
 /* ------------------------------------------------------------------ */

@@ -187,6 +187,16 @@ export function pendingToCase(item: BackendPendingItem, net: Partial<Record<Node
     executionMode: item.execution_mode ?? (item.model_name?.includes("Kaggle") || item.model_name?.includes("live") ? "live" : "demo"),
     latencySec: item.latency_sec ?? (item.execution_mode === "demo" ? 14.0 : 4.8),
     inferenceSource: item.inference_source ?? (item.execution_mode === "demo" ? "Local Deterministic Catalog" : "Kaggle LLM via Cloudflare Tunnel"),
+    macroFamily: item.macro_family,
+    explainableTrigger: item.explainable_trigger,
+    compositeScore: item.composite_score,
+    gateScores: item.gate_scores,
+    executionThreshold: item.execution_threshold ?? 80,
+    violationDelta: item.violation_delta,
+    ttlSeconds: item.ttl_seconds,
+    ttlDisplay: item.ttl_display,
+    isZeroDay: item.is_zero_day,
+    l7Indicator: item.l7_indicator ?? tel?.l7_indicator,
   };
 
   const destIp = item.destination_ip ?? net[target]?.ip ?? "not reported";
@@ -194,7 +204,10 @@ export function pendingToCase(item: BackendPendingItem, net: Partial<Record<Node
     ...(item.scenario_id ? [{ label: "Scenario & family", value: `${item.scenario_id}${item.threat_family ? ` · ${item.threat_family}` : ""}` }] : []),
     { label: "Threat description", value: threatDesc, signal: "suspicious" as const },
     { label: "Attacker → Target", value: `${attacker} (${sourceIp}) → ${target} (${destIp}:${chosen.dest_port})` },
-    ...(tel?.l7_indicator ? [{ label: "Layer-7 payload indicator", value: tel.l7_indicator, signal: "suspicious" as const }] : []),
+    ...(meta.macroFamily ? [{ label: "Macro Family", value: meta.macroFamily }] : []),
+    ...(meta.explainableTrigger ? [{ label: "Explainable Trigger", value: meta.explainableTrigger, signal: "suspicious" as const }] : []),
+    ...(meta.l7Indicator ? [{ label: "Layer-7 payload indicator", value: meta.l7Indicator, signal: "suspicious" as const }] : []),
+    ...(meta.ttlDisplay ? [{ label: "Rule TTL", value: `${meta.ttlDisplay} (dynamic membrane)` }] : []),
     ...(tel?.mitre_tactic ? [{ label: "MITRE ATT&CK", value: `${tel.mitre_tactic} · ${tel.mitre_technique ?? ""}${tel.cve_reference ? ` (${tel.cve_reference})` : ""}` }] : []),
     ...(tel?.packet_rate_pps !== undefined ? [{ label: "Traffic telemetry", value: `${fmtInt(tel.packet_rate_pps)} pps · SYN ratio ${tel.syn_ack_ratio ?? 0} · Entropy ${tel.payload_entropy ?? 0}` }] : []),
     ...(meta.selectedVariant ? [{ label: "Selected variant & Q-Score", value: `Variant ${meta.selectedVariant}${meta.variantLabel ? ` (${meta.variantLabel})` : ""} · Q = ${(meta.qScore ?? 0).toFixed(2)}`, signal: cbTriggered ? ("suspicious" as const) : ("benign" as const) }] : []),

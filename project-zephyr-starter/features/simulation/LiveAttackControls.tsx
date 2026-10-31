@@ -385,6 +385,66 @@ export function LiveAttackControls() {
         </div>
       </div>
 
+      {/* Quick Strike Red Team Presets */}
+      <div className="flex w-full flex-wrap items-center gap-1.5 border-t border-zinc-900/80 pt-1.5">
+        <span className="flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-wider text-red-400">
+          <Crosshair className="size-3" />
+          RED TEAM:
+        </span>
+        <button
+          type="button"
+          disabled={isThinking}
+          onClick={() => handleSelectThreat("SCENARIO_1")}
+          className={cn(
+            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            threat === "SCENARIO_1"
+              ? "border-red-700 bg-red-950/70 font-bold text-red-200"
+              : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200",
+          )}
+        >
+          1. TCP SYN Flood
+        </button>
+        <button
+          type="button"
+          disabled={isThinking}
+          onClick={() => handleSelectThreat("SCENARIO_4")}
+          className={cn(
+            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            threat === "SCENARIO_4"
+              ? "border-red-700 bg-red-950/70 font-bold text-red-200"
+              : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200",
+          )}
+        >
+          2. Slowloris HTTP
+        </button>
+        <button
+          type="button"
+          disabled={isThinking}
+          onClick={() => handleSelectThreat("SCENARIO_10")}
+          className={cn(
+            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            threat === "SCENARIO_10"
+              ? "border-purple-700 bg-purple-950/70 font-bold text-purple-200"
+              : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200",
+          )}
+        >
+          3. SQLi L7 Injection
+        </button>
+        <button
+          type="button"
+          disabled={isThinking}
+          onClick={() => handleSelectThreat("SCENARIO_99")}
+          className={cn(
+            "rounded border px-2 py-0.5 font-mono text-[10px] transition-colors",
+            threat === "SCENARIO_99" || threat === "UNKNOWN_ANOMALY"
+              ? "border-amber-600 bg-amber-950/90 font-bold text-amber-200"
+              : "border-amber-800/80 bg-amber-950/40 text-amber-300 hover:border-amber-600 hover:bg-amber-950/70",
+          )}
+        >
+          ⚡ 4. Zero-Day (Out-of-Distribution)
+        </button>
+      </div>
+
       {/* Bottom Tier: 30-Category Threat Configurator & Prompt Inspector */}
       <div className="flex w-full flex-wrap items-center gap-2 pt-0.5">
         {/* Source Dropdown */}

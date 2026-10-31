@@ -41,6 +41,7 @@ export const SCENARIO_META: Record<number, { port: number; protocol: string }> =
   28: { port: 80, protocol: "TCP" },
   29: { port: 179, protocol: "TCP" },
   30: { port: 0, protocol: "ICMP" },
+  99: { port: 80, protocol: "TCP" },
 };
 
 export const FALLBACK_THREATS: CatalogThreat[] = Object.entries(THREAT_DESCRIPTIONS).map(([key, desc], idx) => {
@@ -148,9 +149,24 @@ export function normalizeCatalog(raw: unknown): Catalog {
   const sources = toNodes(pick(root, ["attackers", "sources", "attacker_nodes", "source_nodes", "red_team"]));
   const targets = toNodes(pick(root, ["victims", "targets", "target_nodes", "victim_nodes", "target_containers"]));
   const threats = toThreats(pick(root, ["threats", "categories", "attacks", "attack_categories", "threat_classifications", "scenarios", "catalog"]) ?? (Array.isArray(raw) ? raw : undefined));
+  const baseThreats = threats.length ? [...threats] : [...FALLBACK_THREATS];
+  if (!baseThreats.some((t) => t.categoryId === 99 || t.scenarioKey === "SCENARIO_99")) {
+    baseThreats.push({
+      id: "UNKNOWN_ANOMALY",
+      scenarioKey: "SCENARIO_99",
+      threatClassification: "UNKNOWN_ANOMALY",
+      threatFamily: "Zero-Day & Advanced Persistent Threats",
+      label: "SCENARIO_99 · UNKNOWN_ANOMALY (Zero-Day)",
+      prompt: "Simulate novel zero-day payload with unmapped polymorphic signature targeting internal port 80.",
+      description: "Unmapped out-of-distribution anomaly triggering Fail-Safe Protocol and conservative L4 rate limiting.",
+      categoryId: 99,
+      targetPort: 80,
+      protocol: "TCP",
+    });
+  }
   return {
     sources: sources.length ? sources : FALLBACK_SOURCES,
     targets: targets.length ? targets : FALLBACK_TARGETS,
-    threats: threats.length ? threats : FALLBACK_THREATS,
+    threats: baseThreats,
   };
 }

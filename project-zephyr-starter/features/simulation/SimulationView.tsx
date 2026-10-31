@@ -1,7 +1,7 @@
 "use client";
 
 import { useDemo } from "@/components/providers/DemoProvider";
-import { DEMO_THINKING_STEPS, LIVE_THINKING_STEPS } from "@/lib/terminal-feeds";
+import { DEMO_THINKING_STEPS, LIVE_THINKING_STEPS, getThinkingSteps } from "@/lib/terminal-feeds";
 import { AlertModal } from "@/features/alerts/AlertModal";
 import { LiveTerminal } from "./LiveTerminal";
 import { LiveAttackControls } from "./LiveAttackControls";
@@ -12,7 +12,7 @@ export function SimulationView() {
   const { state } = useDemo();
   const isThinking = state.drama.phase === "thinking";
   const isLive = state.mode === "live";
-  const steps = isLive ? LIVE_THINKING_STEPS : DEMO_THINKING_STEPS;
+  const steps = getThinkingSteps(isLive, state.drama.threatSignature);
   const thinkingText = steps[state.drama.thinkingStep] ?? steps[0];
 
   return (

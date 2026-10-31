@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { ClipboardList, RotateCcw } from "lucide-react";
+import { Soc2AuditDrawer } from "./Soc2AuditDrawer";
 import type { RawLogsApiResponse } from "@/app/api/raw-logs/route";
 import { useDemo } from "@/components/providers/DemoProvider";
 import { requestSync } from "@/hooks/useBackendSync";
@@ -26,6 +27,7 @@ export function LiveTerminal() {
   const { state, dispatch } = useDemo();
   const [streamLines, setStreamLines] = useState<TerminalLine[]>([]);
   const [busy, setBusy] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
 
   const seqRef = useRef(1);
   const mountedRef = useRef(false);
@@ -183,7 +185,7 @@ export function LiveTerminal() {
       window.clearTimeout(immediateTimer);
       window.clearInterval(interval);
     };
-  }, [isAttackStreaming, attackEpoch]);
+  }, [isAttackStreaming, attackEpoch, state.mode]);
 
   // Mitigation enforced: freeze rapid red logs, inject bold banner, and resume 1-second green logs
   const isMitigated = state.drama.phase === "mitigated";
@@ -271,29 +273,43 @@ export function LiveTerminal() {
   };
 
   const actions = (
-    <button
-      type="button"
-      onClick={() => void reset()}
-      disabled={busy}
-      title="Reset environment"
-      className="flex h-6 items-center gap-1 rounded px-1.5 font-mono text-[11px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 disabled:opacity-50"
-    >
-      <RotateCcw aria-hidden className="size-3" />
-      {busy ? "..." : "reset"}
-    </button>
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={() => setAuditOpen(true)}
+        title="View SOC2 Tripartite Audit Log"
+        className="flex h-6 items-center gap-1 rounded border border-emerald-800/80 bg-emerald-950/40 px-2 font-mono text-[11px] font-medium text-emerald-300 hover:bg-emerald-900/60 hover:text-emerald-200"
+      >
+        <ClipboardList aria-hidden className="size-3" />
+        SOC2 Audit
+      </button>
+      <button
+        type="button"
+        onClick={() => void reset()}
+        disabled={busy}
+        title="Reset environment"
+        className="flex h-6 items-center gap-1 rounded px-1.5 font-mono text-[11px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 disabled:opacity-50"
+      >
+        <RotateCcw aria-hidden className="size-3" />
+        {busy ? "..." : "reset"}
+      </button>
+    </div>
   );
 
   return (
-    <TerminalPanel
-      live
-      deviceId={state.selectedDeviceId}
-      lines={streamLines}
-      onSubmit={() => {}}
-      onClear={() => {
-        setStreamLines([]);
-        dispatch({ type: "terminal_clear", deviceId: state.selectedDeviceId });
-      }}
-      actions={actions}
-    />
+    <>
+      <TerminalPanel
+        live
+        deviceId={state.selectedDeviceId}
+        lines={streamLines}
+        onSubmit={() => {}}
+        onClear={() => {
+          setStreamLines([]);
+          dispatch({ type: "terminal_clear", deviceId: state.selectedDeviceId });
+        }}
+        actions={actions}
+      />
+      <Soc2AuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} />
+    </>
   );
 }

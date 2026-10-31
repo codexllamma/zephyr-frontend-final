@@ -514,7 +514,11 @@ function buildOfflineFallbackPendingItem(a: Extract<DemoAction, { type: "drama_o
   const dstIp = resolveNodeIp(s, a.targetNode);
   const port = a.targetPort || 80;
   const protoLower = (a.protocol || "TCP").toLowerCase() === "http" ? "tcp" : (a.protocol || "TCP").toLowerCase();
-  const goldenCmd = `iptables -A INPUT -s ${srcIp} -p ${protoLower} --dport ${port} -m limit ! --limit 15/s --limit-burst 30 -j DROP`;
+  const isZeroDay = a.categoryId === 99 || a.threatSignature === "UNKNOWN_ANOMALY" || a.scenarioId === "SCENARIO_99";
+  const isSqli = a.categoryId === 10 || (a.threatSignature?.includes("SQLI") ?? false);
+  const goldenCmd = isZeroDay
+    ? `iptables -A INPUT -s ${srcIp} -m limit --limit 50/s -j ACCEPT`
+    : `iptables -A INPUT -s ${srcIp} -p ${protoLower} --dport ${port} -m limit ! --limit 15/s --limit-burst 30 -j DROP`;
 
   const pickedVariant =
     a.variant === "B"
@@ -562,6 +566,29 @@ function buildOfflineFallbackPendingItem(a: Extract<DemoAction, { type: "drama_o
       a.executionMode === "live"
         ? "Kaggle Remote LLM via Cloudflare Tunnel (https://cast-exciting-gpl-ant.trycloudflare.com)"
         : "Deterministic Local Playbook (14s Simulated Latency Hold)",
+    macro_family: isZeroDay ? "Zero-Day / Out-of-Distribution" : isSqli ? "Application" : "Volumetric",
+    explainable_trigger: isZeroDay ? "Unmapped anomaly signature - T1204" : isSqli ? "SQL injection keywords detected in HTTP payload - T1190" : "High packet rate exceeding baseline - T1498.001",
+    composite_score: isB ? 75 : isC ? 75 : 100,
+    gate_scores: {
+      syntax_validity: isC ? 0 : 20,
+      blast_radius_scope: isB ? 0 : 25,
+      target_coherence: 15,
+      protocol_port_alignment: 15,
+      directionality: 10,
+      action_severity: 15,
+    },
+    execution_threshold: 80,
+    violation_delta: cbTriggered
+      ? {
+          attempted: isB ? `AI attempted subnet drop (/16): ${flawedCmd}` : `AI generated invalid syntax: ${flawedCmd}`,
+          enforced: `Playbook deployed surgical drop (/32): ${goldenCmd}`,
+          reason: isB ? "Blast radius gate failed: blanket /16 subnet drop drops benign internal SLA traffic." : "Syntax validity gate failed: invalid netfilter grammar.",
+        }
+      : null,
+    ttl_seconds: isZeroDay ? 600 : isSqli ? 7200 : 1800,
+    ttl_display: isZeroDay ? "10m" : isSqli ? "2h" : "30m",
+    is_zero_day: isZeroDay,
+    l7_indicator: isSqli ? "UNION SELECT username, password FROM users" : null,
     circuit_breaker_triggered: cbTriggered,
     circuit_breaker_reason: cbReason,
     violated_gates: cbTriggered ? [cbReason!] : [],

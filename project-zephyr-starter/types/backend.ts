@@ -51,6 +51,27 @@ export interface BackendPendingItem {
   execution_mode?: "demo" | "live";
   latency_sec?: number;
   inference_source?: string;
+  macro_family?: string;
+  explainable_trigger?: string;
+  composite_score?: number;
+  gate_scores?: {
+    syntax_validity?: number;
+    blast_radius_scope?: number;
+    target_coherence?: number;
+    protocol_port_alignment?: number;
+    directionality?: number;
+    action_severity?: number;
+  };
+  execution_threshold?: number;
+  violation_delta?: {
+    attempted?: string;
+    enforced?: string;
+    reason?: string;
+  } | null;
+  ttl_seconds?: number;
+  ttl_display?: string;
+  is_zero_day?: boolean;
+  l7_indicator?: string | null;
 }
 
 export interface BackendNetworkNode {

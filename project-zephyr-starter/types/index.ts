@@ -333,6 +333,27 @@ export interface BackendMeta {
   executionMode?: "demo" | "live";
   latencySec?: number;
   inferenceSource?: string;
+  macroFamily?: string;
+  explainableTrigger?: string;
+  compositeScore?: number;
+  gateScores?: {
+    syntax_validity?: number;
+    blast_radius_scope?: number;
+    target_coherence?: number;
+    protocol_port_alignment?: number;
+    directionality?: number;
+    action_severity?: number;
+  };
+  executionThreshold?: number;
+  violationDelta?: {
+    attempted?: string;
+    enforced?: string;
+    reason?: string;
+  } | null;
+  ttlSeconds?: number;
+  ttlDisplay?: string;
+  isZeroDay?: boolean;
+  l7Indicator?: string | null;
 }
 
 export interface AlertCase {

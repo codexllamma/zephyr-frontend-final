@@ -28,6 +28,37 @@ export const LIVE_THINKING_STEPS = [
 
 export const LLM_THINKING_STEPS = DEMO_THINKING_STEPS;
 
+export function getThinkingSteps(isLive: boolean, threatSignature?: string): string[] {
+  const isL7 =
+    threatSignature?.toLowerCase().includes("sqli") ||
+    threatSignature?.toLowerCase().includes("sql") ||
+    threatSignature?.toLowerCase().includes("l7") ||
+    threatSignature?.toLowerCase().includes("command_injection") ||
+    threatSignature?.toLowerCase().includes("xss");
+
+  if (isLive) {
+    return [
+      "[LIVE KAGGLE LLM] Packaging raw network vectors into JSON telemetry...",
+      isL7
+        ? "[SYS] Extracting L7 payload artifact: 'UNION SELECT username, password FROM users'..."
+        : "[LIVE KAGGLE LLM] Establishing HTTPS session with Kaggle Cloudflare Tunnel...",
+      "[LIVE KAGGLE LLM] Dispatching prompt to zephyr-dpo-v3 GPU cluster...",
+      "[LIVE SAFETY GATE] Streaming raw LLM tokens through 6-Gate Circuit Breaker...",
+      "[LIVE SAFETY GATE] Syntax & Blast-Radius verified · Ready for HITL review.",
+    ];
+  }
+
+  return [
+    "[DEMO 14s MOCK] Intercepting Anomalous Ingress Payload from catalog...",
+    isL7
+      ? "[SYS] Extracting L7 payload artifact: 'UNION SELECT username, password FROM users'..."
+      : "[DEMO 14s MOCK] Matching Golden Scenario in precomputed dataset...",
+    "[DEMO 14s MOCK] Simulating 14s LLM reasoning latency hold for judge audit...",
+    "[DEMO 14s MOCK] Evaluating deterministic 6-gate composite score candidate...",
+    "[DEMO 14s MOCK] Golden Playbook Rule ready for Human-in-the-Loop review.",
+  ];
+}
+
 export const MITIGATION_ENFORCED_BANNER =
   "============= MITIGATION RULE ENFORCED =============";
 
